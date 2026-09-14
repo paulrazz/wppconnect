@@ -1,6 +1,7 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Code2, LogOut, Settings, MessageSquare } from 'lucide-react';
+import { LayoutDashboard, Code2, LogOut, MessageSquare } from 'lucide-react';
 import { removeApiKey } from '../auth';
+import { motion, AnimatePresence } from 'framer-motion';
 
 export default function Layout({ children }) {
   const location = useLocation();
@@ -17,54 +18,72 @@ export default function Layout({ children }) {
   ];
 
   return (
-    <div className="flex h-screen bg-[#0f1115] text-slate-300 font-sans">
-      {/* Sidebar Navigation */}
-      <aside className="w-64 bg-[#16191f] border-r border-[#262931] flex flex-col justify-between hidden md:flex">
+    <div className="flex h-screen bg-[#0a0c10] text-slate-300 font-sans selection:bg-indigo-500/30 overflow-hidden">
+      
+      {/* Sidebar Navigation (Glassmorphic) */}
+      <aside className="w-64 bg-[#0d1015]/80 backdrop-blur-2xl border-r border-[#1e222b] flex flex-col justify-between hidden md:flex relative z-50">
         <div>
-          <div className="h-16 flex items-center px-6 border-b border-[#262931]">
-            <div className="w-8 h-8 rounded-lg bg-indigo-500 flex items-center justify-center text-white font-bold mr-3 shadow-lg shadow-indigo-500/20">
+          <div className="h-[72px] flex items-center px-6 border-b border-[#1e222b]">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold mr-3 shadow-lg shadow-indigo-500/20">
               <MessageSquare size={18} />
             </div>
-            <span className="text-white font-semibold text-lg tracking-tight">CommNexus</span>
+            <span className="text-white font-extrabold text-xl tracking-tight">CommNexus</span>
           </div>
           
-          <nav className="p-4 space-y-1">
-            <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4 px-2">Platform</div>
+          <nav className="p-4 space-y-1.5 mt-2">
+            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4 px-3">Platform</div>
             {navItems.map((item) => {
               const active = location.pathname === item.path;
               return (
                 <Link
                   key={item.path}
                   to={item.path}
-                  className={`flex items-center px-3 py-2.5 rounded-lg transition-all duration-200 ${
+                  className={`flex items-center px-3 py-3 rounded-xl transition-all duration-300 relative group ${
                     active 
-                      ? 'bg-indigo-500/10 text-indigo-400 font-medium' 
-                      : 'text-slate-400 hover:bg-[#20242c] hover:text-slate-200'
+                      ? 'text-white' 
+                      : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  <item.icon className={`w-5 h-5 mr-3 ${active ? 'text-indigo-400' : 'text-slate-400'}`} />
-                  {item.label}
+                  {/* Active Indicator Glow */}
+                  {active && (
+                    <motion.div layoutId="activeNavIndicator" className="absolute inset-0 bg-indigo-500/10 border border-indigo-500/20 rounded-xl" />
+                  )}
+                  
+                  <item.icon className={`w-5 h-5 mr-3 relative z-10 transition-colors ${active ? 'text-indigo-400' : 'text-slate-500 group-hover:text-slate-400'}`} />
+                  <span className="relative z-10 font-semibold text-sm">{item.label}</span>
                 </Link>
               );
             })}
           </nav>
         </div>
 
-        <div className="p-4 border-t border-[#262931]">
+        <div className="p-4 border-t border-[#1e222b]">
           <button 
             onClick={handleLogout}
-            className="flex w-full items-center px-3 py-2.5 rounded-lg text-slate-400 hover:bg-rose-500/10 hover:text-rose-400 transition-all duration-200"
+            className="flex w-full items-center px-3 py-3 rounded-xl text-slate-400 hover:bg-rose-500/10 hover:text-rose-400 transition-all duration-200 font-semibold text-sm group"
           >
-            <LogOut className="w-5 h-5 mr-3" />
+            <LogOut className="w-5 h-5 mr-3 text-slate-500 group-hover:text-rose-400 transition-colors" />
             Sign Out
           </button>
         </div>
       </aside>
 
-      {/* Main Content Area */}
-      <main className="flex-1 flex flex-col overflow-hidden relative bg-[#0f1115]">
-        {children}
+      {/* Main Content Area with Page Transitions */}
+      <main className="flex-1 flex flex-col relative bg-[#0a0c10] overflow-hidden">
+        <AnimatePresence mode="wait">
+          <motion.div 
+            key={location.pathname}
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -15 }}
+            transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+            className="flex-1 flex flex-col h-full"
+          >
+            {children}
+          </motion.div>
+        </AnimatePresence>
       </main>
+      
     </div>
   );
 }
