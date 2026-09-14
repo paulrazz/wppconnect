@@ -84,6 +84,8 @@ class WhatsAppService {
   async startSession() {
     if (this.client && this.sessionStatus === 'CONNECTED') return this.client;
     if (this.startPromise) return this.startPromise;
+    // Browser is already running and waiting for QR — don't launch a second instance
+    if (this.sessionStatus === 'QR_READY' || this.sessionStatus === 'STARTING') return;
     this.setStatus('STARTING');
     const generation = ++this.lifecycleGeneration;
     this.startPromise = this.createClient(generation);
