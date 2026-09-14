@@ -149,7 +149,30 @@ class WhatsAppService {
         puppeteerOptions: {
           executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || await puppeteer.executablePath(),
           userDataDir: this.sessionPath,
-          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-crash-reporter', '--disable-gpu', '--disable-dev-shm-usage'],
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-crash-reporter',
+            '--disable-gpu',
+            '--disable-dev-shm-usage',
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process', // Vastly reduces memory on single-instance containers
+            '--disable-background-networking',
+            '--disable-default-apps',
+            '--disable-extensions',
+            '--disable-sync',
+            '--disable-translate',
+            '--hide-scrollbars',
+            '--metrics-recording-only',
+            '--mute-audio',
+            '--safebrowsing-disable-auto-update',
+            '--ignore-certificate-errors',
+            '--ignore-ssl-errors',
+            '--disable-component-update',
+            '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+            '--disable-client-side-phishing-detection'
+          ],
         },
       });
       if (generation !== this.lifecycleGeneration) {
@@ -260,7 +283,16 @@ class WhatsAppService {
     this.lifecycleGeneration += 1;
     const client = this.client;
     this.client = null;
-    if (client) await client.close();
+    if (client) {
+      console.log(`[Memory Manager] Forcefully terminating Chromium process for session ${this.sessionName}...`);
+      try {
+        const browser = await client.page.browser();
+        if (browser) browser.process().kill('SIGKILL');
+      } catch (err) {
+        // Ignore errors if browser is already dead
+      }
+      await client.close().catch(() => {});
+    }
     this.setStatus('DISCONNECTED');
   }
   async logoutSession() {
