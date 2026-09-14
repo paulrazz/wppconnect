@@ -87,10 +87,10 @@ export default function Dashboard() {
 
   const StatusIndicator = () => {
     switch(sessionStatus) {
-      case 'CONNECTED': return <div className="flex items-center text-emerald-400 bg-emerald-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><CheckCircle2 className="w-4 h-4 mr-2" /> ONLINE & ROUTING</div>;
-      case 'QR_READY': return <div className="flex items-center text-amber-400 bg-amber-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><Activity className="w-4 h-4 mr-2 animate-pulse" /> AWAITING PAIRING</div>;
-      case 'STARTING': return <div className="flex items-center text-indigo-400 bg-indigo-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><LoaderCircle className="w-4 h-4 mr-2 animate-spin" /> BOOTING ENGINE</div>;
-      default: return <div className="flex items-center text-rose-400 bg-rose-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><XCircle className="w-4 h-4 mr-2" /> ENGINE SUSPENDED</div>;
+      case 'CONNECTED': return <div className="flex items-center text-emerald-400 bg-emerald-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><CheckCircle2 className="w-4 h-4 mr-2" /> ONLINE</div>;
+      case 'QR_READY': return <div className="flex items-center text-amber-400 bg-amber-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><Activity className="w-4 h-4 mr-2 animate-pulse" /> WAITING FOR QR</div>;
+      case 'STARTING': return <div className="flex items-center text-indigo-400 bg-indigo-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><LoaderCircle className="w-4 h-4 mr-2 animate-spin" /> CONNECTING</div>;
+      default: return <div className="flex items-center text-rose-400 bg-rose-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><XCircle className="w-4 h-4 mr-2" /> OFFLINE</div>;
     }
   };
 
@@ -103,21 +103,21 @@ export default function Dashboard() {
           <div>
             <h1 className="text-3xl font-extrabold text-white tracking-tight mb-2 flex items-center">
               <Server className="w-8 h-8 mr-3 text-indigo-500" />
-              Command Center
+              Device Manager
             </h1>
-            <p className="text-slate-400 text-sm font-medium">Manage your cryptographic WhatsApp tunnel and connection health.</p>
+            <p className="text-slate-400 text-sm font-medium">Manage your WhatsApp connection and device health.</p>
           </div>
           <div className="mt-4 md:mt-0 flex flex-col items-end">
             <StatusIndicator />
             <div className="text-xs text-slate-500 mt-2 font-mono flex items-center">
-              <ShieldCheck className="w-3 h-3 mr-1" /> TUNNEL SECURED
+              <ShieldCheck className="w-3 h-3 mr-1" /> SECURE CONNECTION
             </div>
           </div>
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
           
-          {/* Main Connection Screen (The "Smart" part) */}
+          {/* Main Connection Screen */}
           <div className="xl:col-span-2 relative bg-[#12151a] border border-[#1e222b] rounded-2xl p-8 overflow-hidden shadow-2xl">
             {/* Background ambient glow */}
             <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[80%] h-[400px] bg-indigo-500/10 blur-[100px] pointer-events-none rounded-full" />
@@ -134,9 +134,9 @@ export default function Dashboard() {
                         <motion.div animate={{ scale: [1, 1.2, 1], opacity: [0.5, 0, 0.5] }} transition={{ repeat: Infinity, duration: 2 }} className="absolute inset-0 border border-emerald-400 rounded-full" />
                       </div>
                     </div>
-                    <h2 className="text-3xl font-extrabold text-white mb-2">Engine is Active</h2>
+                    <h2 className="text-3xl font-extrabold text-white mb-2">Device Connected</h2>
                     <p className="text-slate-400 max-w-md mx-auto mb-10">
-                      Your cryptographic tunnel is open. The CommNexus engine is actively routing requests to your device.
+                      Your WhatsApp account is successfully linked and ready to send and receive messages.
                     </p>
 
                     {/* Device Metrics Grid */}
@@ -155,12 +155,12 @@ export default function Dashboard() {
                       </div>
                       <div className="bg-[#0f1115] border border-[#1e222b] p-4 rounded-xl">
                         <div className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2 flex items-center"><Cpu className="w-3 h-3 mr-1.5" /> API Status</div>
-                        <div className="text-xl font-medium text-indigo-400">Routing</div>
+                        <div className="text-xl font-medium text-indigo-400">Active</div>
                       </div>
                     </div>
 
                     <button onClick={handleStopSession} className="px-8 py-3 rounded-lg font-bold text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition-all flex items-center justify-center mx-auto">
-                      <StopCircle className="w-5 h-5 mr-2" /> SUSPEND ENGINE
+                      <StopCircle className="w-5 h-5 mr-2" /> DISCONNECT
                     </button>
                   </motion.div>
 
@@ -181,10 +181,10 @@ export default function Dashboard() {
                     
                     <h2 className="text-2xl font-bold text-white mb-3 flex items-center">
                       <Activity className="w-6 h-6 mr-2 text-indigo-400 animate-pulse" />
-                      Awaiting Cryptographic Handshake
+                      Link Your Device
                     </h2>
                     <p className="text-slate-400 text-center max-w-sm mb-6 text-sm">
-                      Open WhatsApp on your device, navigate to <strong>Linked Devices</strong>, and point your camera at the matrix above to establish a secure tunnel.
+                      Open WhatsApp on your phone, navigate to <strong>Linked Devices</strong>, and scan the QR code above to connect.
                     </p>
                   </motion.div>
 
@@ -193,13 +193,13 @@ export default function Dashboard() {
                     <div className="w-24 h-24 bg-[#0f1115] border border-[#1e222b] text-slate-600 rounded-full flex items-center justify-center mx-auto mb-6">
                       <Smartphone className="w-10 h-10" />
                     </div>
-                    <h2 className="text-2xl font-bold text-white mb-2">Engine Suspended</h2>
+                    <h2 className="text-2xl font-bold text-white mb-2">Disconnected</h2>
                     <p className="text-slate-400 max-w-sm mx-auto mb-8 text-sm">
-                      Your cryptographic volume is safely unmounted. Boot the engine to allocate RAM and wake up the Chromium routing layer.
+                      Your WhatsApp session is currently offline. Click below to start the connection process.
                     </p>
                     <button onClick={handleStartSession} disabled={sessionStatus === 'STARTING'} className="px-8 py-4 rounded-xl font-extrabold text-white bg-indigo-600 hover:bg-indigo-500 border border-indigo-500 shadow-lg shadow-indigo-500/20 transition-all flex items-center justify-center mx-auto disabled:opacity-50">
                       {sessionStatus === 'STARTING' ? <LoaderCircle className="w-5 h-5 mr-3 animate-spin" /> : <PlayCircle className="w-5 h-5 mr-3" />}
-                      {sessionStatus === 'STARTING' ? 'INITIALIZING ENGINE...' : 'BOOT ENGINE NOW'}
+                      {sessionStatus === 'STARTING' ? 'CONNECTING...' : 'CONNECT DEVICE'}
                     </button>
                   </motion.div>
                 )}
@@ -212,9 +212,9 @@ export default function Dashboard() {
           <div className="xl:col-span-1 bg-[#12151a] border border-[#1e222b] rounded-2xl p-6 shadow-xl flex flex-col">
             <h2 className="text-lg font-extrabold text-white mb-1 flex items-center">
               <Send className="w-5 h-5 mr-2 text-indigo-400" />
-              Payload Sandbox
+              Test Connection
             </h2>
-            <p className="text-xs text-slate-500 font-medium mb-6">Dispatch instant tests through your tunnel.</p>
+            <p className="text-xs text-slate-500 font-medium mb-6">Send a test message to verify your connection.</p>
 
             <form onSubmit={handleSendTest} className="space-y-5 flex-1 flex flex-col">
               <div>
@@ -223,13 +223,13 @@ export default function Dashboard() {
               </div>
               
               <div className="flex-1 flex flex-col">
-                <label className="block text-xs font-bold tracking-wider text-slate-400 uppercase mb-2">Message Payload</label>
-                <textarea required value={sandboxText} onChange={e => setSandboxText(e.target.value)} placeholder="Type payload..." className="w-full flex-1 min-h-[120px] bg-[#0a0c10] border border-[#1e222b] rounded-xl py-3 px-4 text-slate-200 placeholder-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none resize-none transition-all text-sm" />
+                <label className="block text-xs font-bold tracking-wider text-slate-400 uppercase mb-2">Message</label>
+                <textarea required value={sandboxText} onChange={e => setSandboxText(e.target.value)} placeholder="Type a message..." className="w-full flex-1 min-h-[120px] bg-[#0a0c10] border border-[#1e222b] rounded-xl py-3 px-4 text-slate-200 placeholder-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none resize-none transition-all text-sm" />
               </div>
 
               <button type="submit" disabled={isSending || sessionStatus !== 'CONNECTED'} className="w-full py-3.5 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 transition-all flex items-center justify-center">
                 {isSending ? <LoaderCircle className="w-5 h-5 mr-2 animate-spin" /> : <Send className="w-5 h-5 mr-2" />}
-                {isSending ? 'DISPATCHING...' : 'DISPATCH PAYLOAD'}
+                {isSending ? 'SENDING...' : 'SEND MESSAGE'}
               </button>
             </form>
 
