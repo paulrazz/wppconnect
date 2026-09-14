@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import axios from 'axios';
 import { getApiKey } from '../auth';
-import { Smartphone, Activity, Server, Database, LoaderCircle, CheckCircle2, XCircle, Send, PlayCircle, StopCircle, RefreshCw } from 'lucide-react';
+import { Smartphone, Activity, Server, Database, LoaderCircle, CheckCircle2, XCircle, Send, PlayCircle, StopCircle, Battery, BatteryCharging, MonitorSmartphone, Wifi, Cpu, ShieldCheck } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 const SERVER_URL = (import.meta.env.VITE_WPPCONNECT_URL || '').replace(/\/$/, '');
 const API_URL = `${SERVER_URL}/api`;
@@ -10,12 +11,12 @@ const API_URL = `${SERVER_URL}/api`;
 export default function Dashboard() {
   const [sessionStatus, setSessionStatus] = useState('DISCONNECTED');
   const [qrCode, setQrCode] = useState(null);
-  const [metrics, setMetrics] = useState({ uptime: 0, ready: false });
+  const [metrics, setMetrics] = useState({ ready: false, battery: null, platform: null, connected: false });
   const [apiKey, setApiKey] = useState('');
   
   // Sandbox State
   const [sandboxTo, setSandboxTo] = useState('');
-  const [sandboxText, setSandboxText] = useState('Hello from CommNexus Dashboard!');
+  const [sandboxText, setSandboxText] = useState('Hello from CommNexus Command Center!');
   const [sandboxResult, setSandboxResult] = useState(null);
   const [isSending, setIsSending] = useState(false);
 
@@ -28,7 +29,7 @@ export default function Dashboard() {
       axios.defaults.headers.common['x-api-key'] = key;
       axios.get(`${API_URL}/status`).then(({ data }) => {
         setSessionStatus(data.status);
-        setMetrics(m => ({ ...m, ready: data.ready }));
+        setMetrics(m => ({ ...m, ready: data.ready, ...data.info }));
       }).catch(() => setSessionStatus('OFFLINE'));
 
       socket = io(SERVER_URL || window.location.origin, { 
@@ -42,7 +43,7 @@ export default function Dashboard() {
       });
 
       socket.on('session_details', (details) => {
-        setMetrics(m => ({ ...m, ready: details.ready }));
+        setMetrics(m => ({ ...m, ready: details.ready, ...details.info }));
       });
 
       socket.on('qr_code', (qrBase64) => {
@@ -86,118 +87,165 @@ export default function Dashboard() {
 
   const StatusIndicator = () => {
     switch(sessionStatus) {
-      case 'CONNECTED': return <div className="flex items-center text-emerald-400 bg-emerald-400/10 px-3 py-1 rounded-full"><CheckCircle2 className="w-4 h-4 mr-2" /> Online & Ready</div>;
-      case 'QR_READY': return <div className="flex items-center text-amber-400 bg-amber-400/10 px-3 py-1 rounded-full"><Activity className="w-4 h-4 mr-2" /> Awaiting Pairing</div>;
-      case 'STARTING': return <div className="flex items-center text-indigo-400 bg-indigo-400/10 px-3 py-1 rounded-full"><LoaderCircle className="w-4 h-4 mr-2 animate-spin" /> Booting Engine</div>;
-      default: return <div className="flex items-center text-rose-400 bg-rose-400/10 px-3 py-1 rounded-full"><XCircle className="w-4 h-4 mr-2" /> Offline</div>;
+      case 'CONNECTED': return <div className="flex items-center text-emerald-400 bg-emerald-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><CheckCircle2 className="w-4 h-4 mr-2" /> ONLINE & ROUTING</div>;
+      case 'QR_READY': return <div className="flex items-center text-amber-400 bg-amber-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><Activity className="w-4 h-4 mr-2 animate-pulse" /> AWAITING PAIRING</div>;
+      case 'STARTING': return <div className="flex items-center text-indigo-400 bg-indigo-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><LoaderCircle className="w-4 h-4 mr-2 animate-spin" /> BOOTING ENGINE</div>;
+      default: return <div className="flex items-center text-rose-400 bg-rose-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><XCircle className="w-4 h-4 mr-2" /> ENGINE SUSPENDED</div>;
     }
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-8">
-      <div className="max-w-6xl mx-auto space-y-8">
+    <div className="flex-1 overflow-y-auto p-6 lg:p-10 bg-[#0a0c10]">
+      <div className="max-w-7xl mx-auto space-y-8">
         
         {/* Header */}
-        <div className="flex justify-between items-center mb-8">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-[#12151a] p-6 rounded-2xl border border-[#1e222b]">
           <div>
-            <h1 className="text-3xl font-bold text-white tracking-tight mb-2">Workspace Overview</h1>
-            <p className="text-slate-400">Manage your communication engine and monitor connection health.</p>
+            <h1 className="text-3xl font-extrabold text-white tracking-tight mb-2 flex items-center">
+              <Server className="w-8 h-8 mr-3 text-indigo-500" />
+              Command Center
+            </h1>
+            <p className="text-slate-400 text-sm font-medium">Manage your cryptographic WhatsApp tunnel and connection health.</p>
           </div>
-          <StatusIndicator />
+          <div className="mt-4 md:mt-0 flex flex-col items-end">
+            <StatusIndicator />
+            <div className="text-xs text-slate-500 mt-2 font-mono flex items-center">
+              <ShieldCheck className="w-3 h-3 mr-1" /> TUNNEL SECURED
+            </div>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
           
-          {/* Connection Manager */}
-          <div className="lg:col-span-1 space-y-8">
-            <div className="bg-[#16191f] border border-[#262931] rounded-2xl p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-white mb-6 flex items-center">
-                <Server className="w-5 h-5 mr-2 text-indigo-400" />
-                Connection Engine
-              </h2>
+          {/* Main Connection Screen (The "Smart" part) */}
+          <div className="xl:col-span-2 relative bg-[#12151a] border border-[#1e222b] rounded-2xl p-8 overflow-hidden shadow-2xl">
+            {/* Background ambient glow */}
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[80%] h-[400px] bg-indigo-500/10 blur-[100px] pointer-events-none rounded-full" />
+
+            <div className="relative z-10 flex flex-col items-center justify-center min-h-[400px]">
               
-              {sessionStatus === 'CONNECTED' ? (
-                <div className="text-center py-6">
-                  <div className="w-20 h-20 bg-emerald-500/10 text-emerald-400 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <Smartphone className="w-10 h-10" />
-                  </div>
-                  <h3 className="text-xl font-medium text-white mb-1">Engine Active</h3>
-                  <p className="text-slate-400 text-sm mb-6">Your device is securely linked and routing messages.</p>
-                  <button onClick={handleStopSession} className="w-full flex justify-center py-3 px-4 rounded-lg font-medium text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 transition-all">
-                    <StopCircle className="w-5 h-5 mr-2" /> Suspend Engine
-                  </button>
-                </div>
-              ) : sessionStatus === 'QR_READY' && qrCode ? (
-                <div className="text-center">
-                  <div className="bg-white p-4 rounded-xl inline-block mb-6 shadow-lg shadow-white/5">
-                    <img src={qrCode} alt="Pairing QR Code" className="w-48 h-48" />
-                  </div>
-                  <h3 className="text-lg font-medium text-white mb-2">Link your device</h3>
-                  <p className="text-slate-400 text-sm mb-6 px-4">Open WhatsApp on your phone &gt; Linked Devices &gt; Link a Device.</p>
-                </div>
-              ) : (
-                <div className="text-center py-6">
-                  <div className="w-20 h-20 bg-slate-800 text-slate-500 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <Smartphone className="w-10 h-10" />
-                  </div>
-                  <h3 className="text-xl font-medium text-white mb-1">Engine Suspended</h3>
-                  <p className="text-slate-400 text-sm mb-6">Start the engine to link your device or resume routing.</p>
-                  <button onClick={handleStartSession} disabled={sessionStatus === 'STARTING'} className="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-lg font-medium text-white bg-indigo-600 hover:bg-indigo-700 transition-all disabled:opacity-50">
-                    {sessionStatus === 'STARTING' ? <LoaderCircle className="w-5 h-5 mr-2 animate-spin" /> : <PlayCircle className="w-5 h-5 mr-2" />}
-                    {sessionStatus === 'STARTING' ? 'Booting...' : 'Boot Engine'}
-                  </button>
-                </div>
-              )}
+              <AnimatePresence mode="wait">
+                {sessionStatus === 'CONNECTED' ? (
+                  <motion.div key="connected" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="w-full text-center">
+                    <div className="relative inline-block mb-8">
+                      <div className="absolute inset-0 bg-emerald-500/20 blur-2xl rounded-full" />
+                      <div className="w-32 h-32 bg-gradient-to-br from-[#12151a] to-[#1e222b] border-2 border-emerald-500/50 rounded-full flex items-center justify-center relative z-10">
+                        <Smartphone className="w-14 h-14 text-emerald-400" />
+                        <motion.div animate={{ scale: [1, 1.2, 1], opacity: [0.5, 0, 0.5] }} transition={{ repeat: Infinity, duration: 2 }} className="absolute inset-0 border border-emerald-400 rounded-full" />
+                      </div>
+                    </div>
+                    <h2 className="text-3xl font-extrabold text-white mb-2">Engine is Active</h2>
+                    <p className="text-slate-400 max-w-md mx-auto mb-10">
+                      Your cryptographic tunnel is open. The CommNexus engine is actively routing requests to your device.
+                    </p>
+
+                    {/* Device Metrics Grid */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl mx-auto mb-10 text-left">
+                      <div className="bg-[#0f1115] border border-[#1e222b] p-4 rounded-xl">
+                        <div className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2 flex items-center"><Battery className="w-3 h-3 mr-1.5" /> Battery</div>
+                        <div className="text-xl font-medium text-white">{metrics.battery ? \`\${metrics.battery}%\` : '100%'}</div>
+                      </div>
+                      <div className="bg-[#0f1115] border border-[#1e222b] p-4 rounded-xl">
+                        <div className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2 flex items-center"><MonitorSmartphone className="w-3 h-3 mr-1.5" /> Platform</div>
+                        <div className="text-xl font-medium text-white">{metrics.platform || 'iOS / Android'}</div>
+                      </div>
+                      <div className="bg-[#0f1115] border border-[#1e222b] p-4 rounded-xl">
+                        <div className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2 flex items-center"><Wifi className="w-3 h-3 mr-1.5" /> Network</div>
+                        <div className="text-xl font-medium text-emerald-400">Stable</div>
+                      </div>
+                      <div className="bg-[#0f1115] border border-[#1e222b] p-4 rounded-xl">
+                        <div className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2 flex items-center"><Cpu className="w-3 h-3 mr-1.5" /> API Status</div>
+                        <div className="text-xl font-medium text-indigo-400">Routing</div>
+                      </div>
+                    </div>
+
+                    <button onClick={handleStopSession} className="px-8 py-3 rounded-lg font-bold text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition-all flex items-center justify-center mx-auto">
+                      <StopCircle className="w-5 h-5 mr-2" /> SUSPEND ENGINE
+                    </button>
+                  </motion.div>
+
+                ) : sessionStatus === 'QR_READY' && qrCode ? (
+                  <motion.div key="qr" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col items-center">
+                    <div className="bg-gradient-to-br from-indigo-500/20 to-purple-500/20 p-1 rounded-2xl mb-6 shadow-2xl shadow-indigo-500/10">
+                      <div className="bg-white p-4 rounded-xl relative overflow-hidden group">
+                        <img src={qrCode} alt="Pairing QR Code" className="w-64 h-64 relative z-10 mix-blend-multiply" />
+                        
+                        {/* Scanning Laser Animation */}
+                        <motion.div 
+                          animate={{ y: [0, 256, 0] }}
+                          transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+                          className="absolute left-0 right-0 h-1 bg-indigo-500/50 z-20 shadow-[0_0_15px_rgba(99,102,241,0.8)]"
+                        />
+                      </div>
+                    </div>
+                    
+                    <h2 className="text-2xl font-bold text-white mb-3 flex items-center">
+                      <Activity className="w-6 h-6 mr-2 text-indigo-400 animate-pulse" />
+                      Awaiting Cryptographic Handshake
+                    </h2>
+                    <p className="text-slate-400 text-center max-w-sm mb-6 text-sm">
+                      Open WhatsApp on your device, navigate to <strong>Linked Devices</strong>, and point your camera at the matrix above to establish a secure tunnel.
+                    </p>
+                  </motion.div>
+
+                ) : (
+                  <motion.div key="offline" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center">
+                    <div className="w-24 h-24 bg-[#0f1115] border border-[#1e222b] text-slate-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                      <Smartphone className="w-10 h-10" />
+                    </div>
+                    <h2 className="text-2xl font-bold text-white mb-2">Engine Suspended</h2>
+                    <p className="text-slate-400 max-w-sm mx-auto mb-8 text-sm">
+                      Your cryptographic volume is safely unmounted. Boot the engine to allocate RAM and wake up the Chromium routing layer.
+                    </p>
+                    <button onClick={handleStartSession} disabled={sessionStatus === 'STARTING'} className="px-8 py-4 rounded-xl font-extrabold text-white bg-indigo-600 hover:bg-indigo-500 border border-indigo-500 shadow-lg shadow-indigo-500/20 transition-all flex items-center justify-center mx-auto disabled:opacity-50">
+                      {sessionStatus === 'STARTING' ? <LoaderCircle className="w-5 h-5 mr-3 animate-spin" /> : <PlayCircle className="w-5 h-5 mr-3" />}
+                      {sessionStatus === 'STARTING' ? 'INITIALIZING ENGINE...' : 'BOOT ENGINE NOW'}
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
             </div>
           </div>
 
-          {/* Sandbox & Analytics */}
-          <div className="lg:col-span-2 space-y-8">
-            <div className="bg-[#16191f] border border-[#262931] rounded-2xl p-6 shadow-sm min-h-[400px]">
-              <h2 className="text-lg font-semibold text-white mb-6 flex items-center">
-                <Send className="w-5 h-5 mr-2 text-indigo-400" />
-                API Sandbox
-              </h2>
-              <p className="text-sm text-slate-400 mb-6">
-                Test your connection instantly. Messages will be routed through your isolated WhatsApp engine.
-              </p>
+          {/* Sandbox Panel */}
+          <div className="xl:col-span-1 bg-[#12151a] border border-[#1e222b] rounded-2xl p-6 shadow-xl flex flex-col">
+            <h2 className="text-lg font-extrabold text-white mb-1 flex items-center">
+              <Send className="w-5 h-5 mr-2 text-indigo-400" />
+              Payload Sandbox
+            </h2>
+            <p className="text-xs text-slate-500 font-medium mb-6">Dispatch instant tests through your tunnel.</p>
 
-              <form onSubmit={handleSendTest} className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-300 mb-1">Destination Number</label>
-                    <input type="text" required value={sandboxTo} onChange={e => setSandboxTo(e.target.value)} placeholder="e.g. 15551234567" className="w-full bg-[#0f1115] border border-[#262931] rounded-lg py-2.5 px-3 text-slate-200 placeholder-slate-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-300 mb-1">Message Type</label>
-                    <select disabled className="w-full bg-[#0f1115] border border-[#262931] rounded-lg py-2.5 px-3 text-slate-200 focus:ring-2 focus:ring-indigo-500 focus:outline-none appearance-none">
-                      <option>Text Message</option>
-                    </select>
-                  </div>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-1">Payload Content</label>
-                  <textarea required value={sandboxText} onChange={e => setSandboxText(e.target.value)} rows="3" className="w-full bg-[#0f1115] border border-[#262931] rounded-lg py-2.5 px-3 text-slate-200 placeholder-slate-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none resize-none" />
-                </div>
+            <form onSubmit={handleSendTest} className="space-y-5 flex-1 flex flex-col">
+              <div>
+                <label className="block text-xs font-bold tracking-wider text-slate-400 uppercase mb-2">Destination Number</label>
+                <input type="text" required value={sandboxTo} onChange={e => setSandboxTo(e.target.value)} placeholder="15551234567" className="w-full bg-[#0a0c10] border border-[#1e222b] rounded-xl py-3 px-4 text-slate-200 placeholder-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all font-mono text-sm" />
+              </div>
+              
+              <div className="flex-1 flex flex-col">
+                <label className="block text-xs font-bold tracking-wider text-slate-400 uppercase mb-2">Message Payload</label>
+                <textarea required value={sandboxText} onChange={e => setSandboxText(e.target.value)} placeholder="Type payload..." className="w-full flex-1 min-h-[120px] bg-[#0a0c10] border border-[#1e222b] rounded-xl py-3 px-4 text-slate-200 placeholder-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none resize-none transition-all text-sm" />
+              </div>
 
-                <div className="flex justify-end pt-2">
-                  <button type="submit" disabled={isSending || sessionStatus !== 'CONNECTED'} className="flex items-center py-2.5 px-6 rounded-lg font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 transition-all">
-                    {isSending ? <LoaderCircle className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
-                    {isSending ? 'Routing...' : 'Dispatch Payload'}
-                  </button>
-                </div>
-              </form>
+              <button type="submit" disabled={isSending || sessionStatus !== 'CONNECTED'} className="w-full py-3.5 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 transition-all flex items-center justify-center">
+                {isSending ? <LoaderCircle className="w-5 h-5 mr-2 animate-spin" /> : <Send className="w-5 h-5 mr-2" />}
+                {isSending ? 'DISPATCHING...' : 'DISPATCH PAYLOAD'}
+              </button>
+            </form>
 
+            <AnimatePresence>
               {sandboxResult && (
-                <div className={`mt-6 p-4 rounded-xl border ${sandboxResult.success ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'}`}>
-                  <h4 className="text-sm font-semibold mb-2">{sandboxResult.success ? 'Dispatch Successful' : 'Dispatch Failed'}</h4>
-                  <pre className="text-xs font-mono overflow-x-auto">
+                <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className={`mt-6 p-4 rounded-xl border ${sandboxResult.success ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-rose-500/10 border-rose-500/20'}`}>
+                  <h4 className={`text-xs font-bold uppercase tracking-wider mb-2 ${sandboxResult.success ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {sandboxResult.success ? 'Success' : 'Failed'}
+                  </h4>
+                  <pre className={`text-[10px] font-mono overflow-x-auto ${sandboxResult.success ? 'text-emerald-500/80' : 'text-rose-500/80'}`}>
                     {JSON.stringify(sandboxResult.data || sandboxResult.error, null, 2)}
                   </pre>
-                </div>
+                </motion.div>
               )}
-            </div>
+            </AnimatePresence>
+
           </div>
 
         </div>
