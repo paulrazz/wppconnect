@@ -3,7 +3,7 @@ import { useTheme } from '../ThemeContext';
 import axios from 'axios';
 import { getApiKey } from '../auth';
 import { useNavigate } from 'react-router-dom';
-import { Code2, Copy, Lock, Check, Terminal, PlayCircle, LoaderCircle, Webhook, Activity, FileText, MessageSquare, Server, Image as ImageIcon, Users } from 'lucide-react';
+import { Code2, Copy, Lock, Check, Terminal, PlayCircle, LoaderCircle, Webhook, Activity, FileText, MessageSquare, Server, Image as ImageIcon, Users, Plus, Trash2, Globe } from 'lucide-react';
 import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
 import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash';
 import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript';
@@ -20,6 +20,21 @@ SyntaxHighlighter.registerLanguage('php', php);
 SyntaxHighlighter.registerLanguage('json', json);
 
 const SERVER_URL = (import.meta.env.VITE_WPPCONNECT_URL || '').replace(/\/$/, '');
+
+const WEBHOOK_EVENTS = [
+  { id: '*', label: 'All events' },
+  { id: 'message.received', label: 'Incoming message' },
+  { id: 'message.sent', label: 'Outgoing message' },
+  { id: 'message.ack', label: 'Read / delivered (ack)' },
+  { id: 'message.deleted', label: 'Message deleted' },
+  { id: 'message.edited', label: 'Message edited' },
+  { id: 'message.reaction', label: 'Reaction' },
+  { id: 'call.received', label: 'Incoming call' },
+  { id: 'session.status', label: 'Session status' },
+  { id: 'whatsapp.state', label: 'WhatsApp state' },
+  { id: 'status.received', label: 'Status (story) received' },
+  { id: 'status.deleted', label: 'Status deleted' },
+];
 
 // Memoized Code Block for heavy optimization
 const CodeBlock = memo(({ language, code, theme }) => (
@@ -42,7 +57,61 @@ export default function Developer() {
   const [isTesting, setIsTesting] = useState(false);
   const [activeSection, setActiveSection] = useState('auth');
   const [playgroundModal, setPlaygroundModal] = useState({ isOpen: false, endpoint: null });
+  const [webhooks, setWebhooks] = useState([]);
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const [webhookSecret, setWebhookSecret] = useState('');
+  const [webhookEvents, setWebhookEvents] = useState(['*']);
+  const [webhookBusy, setWebhookBusy] = useState(false);
+  const [webhookMsg, setWebhookMsg] = useState(null);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (activeSection !== 'webhooks' || !apiKey) return;
+    axios.get(`${SERVER_URL}/api/v1/webhooks`, { headers: { 'x-api-key': apiKey } })
+      .then(res => setWebhooks(Array.isArray(res.data?.data) ? res.data.data : []))
+      .catch(() => setWebhooks([]));
+  }, [activeSection, apiKey]);
+
+  const toggleWebhookEvent = (eventId) => {
+    setWebhookEvents(prev => {
+      if (eventId === '*') return ['*'];
+      const rest = prev.filter(e => e !== '*');
+      if (rest.includes(eventId)) return rest.length === 1 ? ['*'] : rest.filter(e => e !== eventId);
+      return [...rest, eventId];
+    });
+  };
+
+  const createWebhook = async (e) => {
+    e.preventDefault();
+    if (!webhookUrl.trim()) return;
+    setWebhookBusy(true);
+    setWebhookMsg(null);
+    try {
+      const res = await axios.post(`${SERVER_URL}/api/v1/webhooks`,
+        { url: webhookUrl.trim(), events: webhookEvents.length ? webhookEvents : ['*'], secret: webhookSecret.trim() || undefined },
+        { headers: { 'x-api-key': apiKey } });
+      setWebhooks(prev => [...prev, res.data?.data]);
+      setWebhookUrl('');
+      setWebhookSecret('');
+      setWebhookEvents(['*']);
+      setWebhookMsg({ ok: true, text: 'Webhook created. It will receive POST requests on the selected events.' });
+    } catch (err) {
+      setWebhookMsg({ ok: false, text: err.response?.data?.error || err.message });
+    } finally {
+      setWebhookBusy(false);
+    }
+  };
+
+  const deleteWebhook = async (id) => {
+    if (!window.confirm('Remove this webhook endpoint?')) return;
+    setWebhookMsg(null);
+    try {
+      await axios.delete(`${SERVER_URL}/api/v1/webhooks/${id}`, { headers: { 'x-api-key': apiKey } });
+      setWebhooks(prev => prev.filter(w => w.id !== id));
+    } catch (err) {
+      setWebhookMsg({ ok: false, text: err.response?.data?.error || err.message });
+    }
+  };
 
   useEffect(() => {
     getApiKey().then(key => {
@@ -248,15 +317,105 @@ export default function Developer() {
                 {activeSection === 'webhooks' && (
                   <div className="space-y-6">
                     <p className={`text-lg leading-relaxed ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>
-                      Configure webhooks to receive real-time notifications for incoming messages, status updates, and read receipts.
+                      Webhooks let your server react in real time to WhatsApp events — incoming and outgoing messages, read receipts, deletions, statuses, and more. Add your endpoint URL and choose which events to deliver.
                     </p>
+
+                    {webhookMsg && (
+                      <div className={`px-4 py-3 rounded-lg border text-sm ${webhookMsg.ok ? (theme === 'dark' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-emerald-50 border-emerald-300 text-emerald-700') : (theme === 'dark' ? 'bg-rose-500/10 border-rose-500/30 text-rose-400' : 'bg-rose-50 border-rose-300 text-rose-700')}`}>
+                        {webhookMsg.text}
+                      </div>
+                    )}
+
+                    {/* Create form */}
+                    <form onSubmit={createWebhook} className={`p-6 rounded-xl border ${theme === 'dark' ? 'bg-[#12151a] border-[#1e222b]' : 'bg-white border-slate-200 shadow-sm'}`}>
+                      <h3 className={`text-sm font-bold uppercase tracking-wider mb-4 flex items-center ${theme === 'dark' ? 'text-slate-300' : 'text-slate-800'}`}>
+                        <Plus className="w-4 h-4 mr-2 text-indigo-500" /> Add Webhook Endpoint
+                      </h3>
+
+                      <label className={`block text-xs font-semibold mb-1.5 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>Destination URL</label>
+                      <div className={`flex items-center rounded-lg border mb-4 overflow-hidden focus-within:ring-2 focus-within:ring-indigo-500/40 transition-all ${theme === 'dark' ? 'bg-[#0a0c10] border-[#262931]' : 'bg-slate-50 border-slate-300'}`}>
+                        <Globe className={`w-4 h-4 ml-3 shrink-0 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`} />
+                        <input
+                          type="url"
+                          value={webhookUrl}
+                          onChange={(e) => setWebhookUrl(e.target.value)}
+                          placeholder="https://your-app.example.com/webhook/wppconnect"
+                          className={`flex-1 bg-transparent border-none focus:ring-0 text-sm px-3 py-3 outline-none ${theme === 'dark' ? 'text-slate-200 placeholder-slate-500' : 'text-slate-800 placeholder-slate-400'}`}
+                        />
+                      </div>
+
+                      <label className={`block text-xs font-semibold mb-1.5 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>Secret <span className="font-normal opacity-60">(optional — signs deliveries with HMAC-SHA256 via X-WPP-Signature)</span></label>
+                      <input
+                        type="password"
+                        value={webhookSecret}
+                        onChange={(e) => setWebhookSecret(e.target.value)}
+                        placeholder="verify your delivery is genuine"
+                        className={`w-full rounded-lg border text-sm px-3 py-3 mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all ${theme === 'dark' ? 'bg-[#0a0c10] border-[#262931] text-slate-200 placeholder-slate-500' : 'bg-slate-50 border-slate-300 text-slate-800 placeholder-slate-400'}`}
+                      />
+
+                      <label className={`block text-xs font-semibold mb-2 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>Trigger events</label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-5">
+                        {WEBHOOK_EVENTS.map(event => (
+                          <label key={event.id} className={`flex items-center px-3 py-2.5 rounded-lg border cursor-pointer select-none transition-colors ${webhookEvents.includes(event.id) ? (theme === 'dark' ? 'bg-indigo-500/10 border-indigo-500/40' : 'bg-indigo-50 border-indigo-400') : (theme === 'dark' ? 'bg-[#0a0c10] border-[#262931]' : 'bg-slate-50 border-slate-200')}`}>
+                            <input
+                              type="checkbox"
+                              checked={webhookEvents.includes(event.id)}
+                              onChange={() => toggleWebhookEvent(event.id)}
+                              className="mr-2 accent-indigo-600"
+                            />
+                            <span className={`text-sm ${theme === 'dark' ? 'text-slate-300' : 'text-slate-700'}`}>{event.label}</span>
+                          </label>
+                        ))}
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={webhookBusy || !webhookUrl.trim()}
+                        className={`flex items-center justify-center w-full py-3 rounded-xl font-bold transition-all disabled:opacity-50 ${theme === 'dark' ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-200'}`}
+                      >
+                        {webhookBusy ? <LoaderCircle className="w-5 h-5 mr-2 animate-spin" /> : <Plus className="w-5 h-5 mr-2" />}
+                        {webhookBusy ? 'Creating...' : 'Add Webhook'}
+                      </button>
+                    </form>
+
+                    {/* Existing webhooks */}
                     <div className={`p-6 rounded-xl border ${theme === 'dark' ? 'bg-[#12151a] border-[#1e222b]' : 'bg-white border-slate-200 shadow-sm'}`}>
-                      <h3 className={`text-sm font-bold uppercase tracking-wider mb-2 ${theme === 'dark' ? 'text-slate-300' : 'text-slate-800'}`}>Event Types</h3>
-                      <ul className={`list-disc list-inside space-y-2 mt-4 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>
-                        <li><strong className={theme === 'dark' ? 'text-slate-200' : 'text-slate-900'}>message</strong> - Triggered when a new message is received.</li>
-                        <li><strong className={theme === 'dark' ? 'text-slate-200' : 'text-slate-900'}>status</strong> - Triggered when engine connects or disconnects.</li>
-                        <li><strong className={theme === 'dark' ? 'text-slate-200' : 'text-slate-900'}>ack</strong> - Triggered when a message is read or delivered.</li>
-                      </ul>
+                      <h3 className={`text-sm font-bold uppercase tracking-wider mb-4 ${theme === 'dark' ? 'text-slate-300' : 'text-slate-800'}`}>
+                        Active Webhooks ({webhooks.length})
+                      </h3>
+                      {webhooks.length === 0 ? (
+                        <p className={`text-sm py-6 text-center ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+                          No webhooks configured yet. Add your first endpoint above.
+                        </p>
+                      ) : (
+                        <ul className="space-y-3">
+                          {webhooks.map(webhook => (
+                            <li key={webhook.id} className={`flex items-start justify-between gap-3 p-4 rounded-lg border ${theme === 'dark' ? 'border-[#1e222b] bg-[#0a0c10]' : 'border-slate-200 bg-slate-50'}`}>
+                              <div className="flex-1 min-w-0">
+                                <p className={`font-mono text-xs sm:text-sm truncate ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-600'}`}>{webhook.url}</p>
+                                <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                                  {webhook.events.map(evt => (
+                                    <span key={evt} className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${evt === '*' ? (theme === 'dark' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-emerald-100 text-emerald-700') : (theme === 'dark' ? 'bg-[#1e222b] text-slate-300' : 'bg-slate-200 text-slate-700')}`}>
+                                      {evt === '*' ? 'All events' : evt}
+                                    </span>
+                                  ))}
+                                  {webhook.hasSecret && (
+                                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${theme === 'dark' ? 'bg-amber-500/15 text-amber-400' : 'bg-amber-100 text-amber-700'}`}>Signed</span>
+                                  )}
+                                  <span className={`text-[10px] ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>{new Date(webhook.createdAt).toLocaleString()}</span>
+                                </div>
+                              </div>
+                              <button
+                                onClick={() => deleteWebhook(webhook.id)}
+                                className={`p-2 rounded-lg transition-colors shrink-0 ${theme === 'dark' ? 'text-slate-500 hover:text-rose-400 hover:bg-rose-500/10' : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'}`}
+                                title="Delete webhook"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                   </div>
                 )}
@@ -358,7 +517,7 @@ export default function Developer() {
               </div>
             ) : activeSection === 'webhooks' ? (
               <div className="p-6">
-                <CodeBlock language="json" theme="dark" code={`{\n  "event": "message",\n  "data": {\n    "from": "15551234567@c.us",\n    "text": "Hello, I need support!",\n    "timestamp": 1694678123,\n    "isGroupMsg": false\n  }\n}`} />
+                <CodeBlock language="json" theme="dark" code={`// Delivered as POST to your URL (envelope + event payload)\n{\n  "id": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",\n  "event": "message.received",\n  "createdAt": "2026-09-14T10:30:00.000Z",\n  "data": {\n    "from": "2349034040635@c.us",\n    "body": "Hello, I need support!",\n    "timestamp": 1694678123,\n    "fromMe": false\n  }\n}\n\n// Signed deliveries add the header:\n// X-WPP-Signature: sha256=<HMAC-SHA256(secret, body)>\n\n// Create it with:\n// POST /api/v1/webhooks\n// {\n//   "url": "https://your-app.example.com/webhook/wppconnect",\n//   "events": ["message.received", "message.sent", "message.ack"],\n//   "secret": "optional-shared-secret"\n// }`} />
               </div>
             ) : (
               endpoints.map(ep => activeSection === ep.id && (

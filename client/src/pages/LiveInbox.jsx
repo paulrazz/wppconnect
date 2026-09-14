@@ -1,25 +1,223 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { io } from 'socket.io-client';
 import { getApiKey } from '../auth';
 import { useTheme } from '../ThemeContext';
-import { Send, UserCircle, Search, MessageSquare, LoaderCircle, Lock } from 'lucide-react';
+import { UserCircle, Search, MessageSquare, LoaderCircle, Lock, Reply, SmilePlus, Download, FileText, MapPin } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import ChatInputForm from '../components/ChatInputForm';
 
 const SERVER_URL = (import.meta.env.VITE_WPPCONNECT_URL || '').replace(/\/$/, '');
 const API_URL = `${SERVER_URL}/api`;
 
+const msgId = (m) => m?.id?._serialized || m?.id?.id || (typeof m?.id === 'string' ? m.id : null);
+
+const MEDIA_TYPES = ['image', 'video', 'gif', 'audio', 'ptt', 'sticker', 'document'];
+const REACTION_EMOJIS = ['👍', '❤️', '😂', '😢', '🙏', '🎉'];
+
+const safeText = (message) => message?.caption || message?.body || message?.text || message?.content || '';
+
+// Lazily fetches/downloads a message's media payload from the API (cached per message).
+function MediaContent({ message, apiKey, theme }) {
+  const [data, setData] = useState(null);
+  const [unavailable, setUnavailable] = useState(false);
+  const type = String(message.type || '').toLowerCase();
+
+  useEffect(() => {
+    let alive = true;
+    axios.get(`${API_URL}/media/${encodeURIComponent(String(msgId(message)))}`, { headers: { 'x-api-key': apiKey } })
+      .then(res => { if (alive) setData(res.data); })
+      .catch(() => { if (alive) setUnavailable(true); });
+    return () => { alive = false; };
+  }, [message, apiKey]);
+
+  if (unavailable) {
+    return (
+      <p className={`text-xs italic ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+        {type === 'video' || type === 'gif' ? '🎥 ' : type === 'audio' || type === 'ptt' ? '🎵 ' : type === 'sticker' ? '' : '📄 '}
+        Media no longer available
+      </p>
+    );
+  }
+  if (!data?.dataUrl) return <LoaderCircle className="w-4 h-4 animate-spin opacity-50" />;
+
+  if (type === 'image' || type === 'gif') {
+    return <img src={data.dataUrl} alt={message.caption || 'Image'} className="max-h-64 rounded-lg" />;
+  }
+  if (type === 'video') {
+    return <video src={data.dataUrl} controls className="max-h-64 rounded-lg" />;
+  }
+  if (type === 'audio' || type === 'ptt') {
+    return <audio src={data.dataUrl} controls className="w-56" />;
+  }
+  if (type === 'sticker') {
+    return <img src={data.dataUrl} alt="Sticker" className="w-28 h-28" />;
+  }
+  if (type === 'document') {
+    const name = message.filename || message.fileName || 'document';
+    return (
+      <a href={data.dataUrl} download={name} className="flex items-center gap-2 text-xs font-semibold underline decoration-dotted">
+        <FileText className="w-4 h-4" /> {name} <Download className="w-3 h-3" />
+      </a>
+    );
+  }
+  return null;
+}
+
+function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReact }) {
+  const [showReactions, setShowReactions] = useState(false);
+  const type = String(message.type || 'chat').toLowerCase();
+  const isMe = message.fromMe || message.isSentByMe || message.isSendByMe;
+  const isMedia = MEDIA_TYPES.includes(type);
+  const isDeleted = message.isDeleted || message.isRevoked || type === 'revoked';
+
+  const quote = (() => {
+    const q = message.quotedMsgObj || message.quotedMsg || (message.quotedMsgObj?.value);
+    if (!q) return null;
+    const text = safeText(q);
+    if (!text && !q.filename) return null;
+    const who = q.fromMe ? 'You' : (q.senderName || q.notifyName || q.author || q.pushname || (typeof q.from === 'string' ? q.from.split('@')[0] : 'Contact'));
+    return { who, text, hasMedia: MEDIA_TYPES.includes(String(q.type || '').toLowerCase()) };
+  })();
+
+  const text = safeText(message);
+
+  const location = message.location || {};
+  const lat = message.lat ?? location.latitude ?? location.lat;
+  const lng = message.lng ?? location.longitude ?? location.lng;
+  const isLocation = type.includes('location') || (lat != null && lng != null);
+  const isContact = type === 'vcard' || type === 'contact' || type === 'contact_card';
+
+  return (
+    <div className={`flex flex-col max-w-[78%] ${isMe ? 'self-end items-end' : 'self-start items-start'}`}>
+      <div className={`px-3 py-2.5 rounded-2xl ${isMe ? 'bg-indigo-600 text-white rounded-tr-sm shadow-indigo-500/20' : (theme === 'dark' ? 'bg-[#1e222b] text-slate-200 rounded-tl-sm' : 'bg-white border border-slate-200 text-slate-800 rounded-tl-sm')} shadow-sm w-fit max-w-full min-w-[2rem]`}>
+        {quote && (
+          <div className={`mb-2 px-3 py-2 rounded-lg border-l-4 text-xs ${isMe ? 'bg-indigo-500/30 border-indigo-300' : (theme === 'dark' ? 'bg-black/30 border-slate-500' : 'bg-slate-100 border-slate-400')}`}>
+            <p className={`font-semibold mb-0.5 ${isMe ? 'text-indigo-100' : theme === 'dark' ? 'text-slate-300' : 'text-slate-600'}`}>{quote.who}</p>
+            <p className={`italic ${isMe ? 'text-indigo-100' : theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
+              {quote.hasMedia ? '📎 ' : ''}{quote.text || 'Media'}
+            </p>
+          </div>
+        )}
+
+        {isDeleted ? (
+          <p className="italic opacity-70 text-xs">🚫 This message was deleted</p>
+        ) : isMedia ? (
+          <>
+            <MediaContent message={message} apiKey={apiKey} theme={theme} />
+            {text && <p className="text-sm whitespace-pre-wrap break-words mt-1.5">{text}</p>}
+          </>
+        ) : isLocation ? (
+          <a
+            className="flex items-center gap-2 text-sm font-semibold underline"
+            href={`https://maps.google.com/?q=${lat},${lng}`} target="_blank" rel="noreferrer"
+          >
+            <MapPin className="w-4 h-4" /> Location {text ? `· ${text}` : ''}
+          </a>
+        ) : isContact ? (
+          <p className="flex items-center gap-2 text-sm">
+            <span className="text-base">👤</span> {message.vcardFormattedName || message.contactFormattedName || message.contactName || (type === 'vcard' && message.vcard ? 'Contact card' : text || 'Contact card')}
+          </p>
+        ) : type === 'chat' ? (
+          <p className="text-sm whitespace-pre-wrap break-words">{text || '…'}</p>
+        ) : type === 'revoked' ? (
+          <p className="italic opacity-70 text-xs">🚫 This message was deleted</p>
+        ) : (
+          <p className="text-sm italic opacity-80">{text || `[${type.replaceAll('_', ' ')}]`}</p>
+        )}
+      </div>
+
+      {reactions.length > 0 && (
+        <div className={`flex flex-wrap gap-1 mt-1 ${isMe ? '' : ''}`}>
+          {reactions.map((r, i) => (
+            <span key={i} className={`text-xs px-2 py-0.5 rounded-full border ${theme === 'dark' ? 'bg-[#12151a] border-[#262931] text-slate-300' : 'bg-white border-slate-200 text-slate-600'}`}>
+              {r.emoji}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className={`flex items-center gap-2 mt-0.5 ${isMe ? 'flex-row-reverse' : ''}`}>
+        <span className={`text-[10px] ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+          {new Date((message.timestamp || 0) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </span>
+        {onReply && (
+          <button onClick={() => onReply(message)} title="Reply"
+            className={`p-1 rounded ${theme === 'dark' ? 'text-slate-500 hover:text-indigo-400' : 'text-slate-400 hover:text-indigo-600'}`}>
+            <Reply className="w-3 h-3" />
+          </button>
+        )}
+        {onReact && (
+          <button onClick={() => setShowReactions(v => !v)} title="React"
+            className={`relative p-1 rounded ${theme === 'dark' ? 'text-slate-500 hover:text-indigo-400' : 'text-slate-400 hover:text-indigo-600'}`}>
+            <SmilePlus className="w-3 h-3" />
+          </button>
+        )}
+      </div>
+
+      {showReactions && onReact && (
+        <div className={`mt-1 flex items-center gap-1 px-2 py-1.5 rounded-full border shadow-lg ${theme === 'dark' ? 'bg-[#16191f] border-[#262931]' : 'bg-white border-slate-200'}`}>
+          {REACTION_EMOJIS.map(emoji => (
+            <button key={emoji}
+              onClick={() => { onReact(message, emoji); setShowReactions(false); }}
+              className="text-lg hover:scale-125 transition-transform">
+              {emoji}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function LiveInbox() {
   const { theme } = useTheme();
   const navigate = useNavigate();
-  
+
   const [apiKey, setApiKey] = useState('');
   const [sessionStatus, setSessionStatus] = useState('LOADING');
   const [contacts, setContacts] = useState({});
-  const [chats, setChats] = useState({}); // { chatId: { contact: {}, messages: [] } }
+  const [apiChats, setApiChats] = useState([]);
+  const [chats, setChats] = useState({}); // { chatId: { messages: [] } } - live messages only
+  const [reactions, setReactions] = useState({}); // { msgId: [{ emoji, senderId }] }
   const [activeChatId, setActiveChatId] = useState(null);
+  const [replyTo, setReplyTo] = useState(null);
   const messagesEndRef = useRef(null);
+
+  const connectSocket = useCallback((key) => {
+    const socket = io(SERVER_URL || window.location.origin, {
+      auth: { apiKey: key },
+      transports: ['websocket', 'polling']
+    });
+
+    socket.on('new_message', (msg) => {
+      const chatId = msg.chatId?._serialized || msg.chatId || (msg.fromMe ? msg.to : msg.from);
+      if (!chatId) return;
+      setChats(prev => {
+        const updated = { ...prev };
+        if (!updated[chatId]) updated[chatId] = { messages: [] };
+        if (!updated[chatId].messages.some(m => msgId(m) && msgId(m) === msgId(msg))) {
+          updated[chatId].messages.push(msg);
+        }
+        return updated;
+      });
+    });
+
+    socket.on('message_reaction', (data) => {
+      const targetId = data.msgId?._serialized || data.msgId?.id || data.msgId;
+      if (!targetId) return;
+      const sender = typeof data.sender === 'string' ? data.sender : (data.sender?._serialized || String(data.sender));
+      setReactions(prev => {
+        const list = (prev[targetId] || []).filter(r => (r.senderId || r.sender) !== sender);
+        if (!data.orphan && data.reactionText) {
+          list.push({ emoji: data.reactionText, senderId: sender });
+        }
+        return { ...prev, [targetId]: list };
+      });
+    });
+
+    return socket;
+  }, []);
 
   useEffect(() => {
     let socket;
@@ -27,74 +225,97 @@ export default function LiveInbox() {
       setApiKey(key);
       if (!key) return;
 
-      // Verify connection status
       axios.get(`${API_URL}/status`, { headers: { 'x-api-key': key } })
         .then(res => {
           setSessionStatus(res.data.status);
           if (res.data.status === 'CONNECTED') {
+            fetchChatList(key);
             fetchContacts(key);
-            connectSocket(key);
+            socket = connectSocket(key);
           }
         })
         .catch(() => setSessionStatus('DISCONNECTED'));
     });
 
+    const fetchChatList = async (key) => {
+      try {
+        const res = await axios.get(`${API_URL}/chats`, { headers: { 'x-api-key': key } });
+        const list = Array.isArray(res.data.chats) ? res.data.chats : [];
+        setApiChats(list.map(c => {
+          const rawId = c.id?._serialized || c.id;
+          const id = typeof rawId === 'string' ? rawId : String(rawId || '');
+          return {
+            id,
+            displayName: c.displayName || (id.split('@')[0] || id),
+            lastMessage: c.lastMessage || null,
+            contact: c.contact || null,
+          };
+        }).filter(c => c.id));
+      } catch (err) {
+        console.error("Failed to load chat list", err);
+      }
+    };
+
     const fetchContacts = async (key) => {
       try {
         const res = await axios.get(`${API_URL}/contacts`, { headers: { 'x-api-key': key } });
         const contactMap = {};
-        res.data.contacts.forEach(c => {
-          contactMap[c.id._serialized] = c;
-        });
+        res.data.contacts.forEach(c => { contactMap[c.id._serialized] = c; });
         setContacts(contactMap);
       } catch (err) {
         console.error("Failed to load contacts", err);
       }
     };
 
-    const connectSocket = (key) => {
-      socket = io(SERVER_URL || window.location.origin, { 
-        auth: { apiKey: key },
-        transports: ['websocket', 'polling']
-      });
-
-      socket.on('new_message', (msg) => {
-        const chatId = msg.chatId?._serialized || msg.from;
-        setChats(prev => {
-          const updated = { ...prev };
-          if (!updated[chatId]) {
-            updated[chatId] = { messages: [] };
-          }
-          // Avoid duplicates
-          if (!updated[chatId].messages.some(m => m.id === msg.id)) {
-            updated[chatId].messages.push(msg);
-          }
-          return updated;
-        });
-      });
-    };
-
     return () => socket && socket.disconnect();
-  }, []);
+  }, [connectSocket]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chats, activeChatId]);
 
+  const openChat = (chatId) => setActiveChatId(chatId);
 
-  const onMessageSent = (sentMsg) => {
+  const onMessageSent = useCallback((sentMsg) => {
     setChats(prev => {
       const updated = { ...prev };
-      updated[activeChatId].messages.push(sentMsg);
+      const chat = updated[activeChatId];
+      if (!chat) return prev;
+      if (chat.messages.some(m => msgId(m) && msgId(m) === msgId(sentMsg))) return prev;
+      chat.messages.push(sentMsg);
       return updated;
     });
-  };
+  }, [activeChatId]);
+
+  const sendReaction = useCallback(async (message, emoji) => {
+    try {
+      await axios.post(`${API_URL}/send-reaction`,
+        { messageId: msgId(message), reaction: emoji },
+        { headers: { 'x-api-key': apiKey } });
+    } catch (err) {
+      console.error("Failed to send reaction", err);
+    }
+  }, [apiKey]);
+
   const resolveName = (chatId) => {
     if (!chatId) return 'Unknown';
     if (contacts[chatId]?.name) return contacts[chatId].name;
     if (contacts[chatId]?.pushname) return contacts[chatId].pushname;
+    if (contacts[chatId]?.verifiedName) return contacts[chatId].verifiedName;
     return chatId.split('@')[0];
   };
+
+  // Merge API chat list (with last-message subtitles) + live chats into one sorted sidebar.
+  const sidebar = (() => {
+    const map = {};
+    apiChats.forEach(c => { map[c.id] = { ...c }; });
+    Object.entries(chats).forEach(([chatId, { messages }]) => {
+      const last = messages[messages.length - 1];
+      if (!map[chatId]) map[chatId] = { id: chatId, displayName: resolveName(chatId), lastMessage: null, contact: null };
+      if (last) map[chatId] = { ...map[chatId], lastMessage: { ...last, timestamp: last.timestamp || 0 } };
+    });
+    return Object.values(map).sort((a, b) => (b.lastMessage?.timestamp || 0) - (a.lastMessage?.timestamp || 0));
+  })();
 
   if (sessionStatus === 'LOADING') {
     return (
@@ -117,8 +338,8 @@ export default function LiveInbox() {
         <p className={`max-w-md mb-8 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>
           Your secure inbox requires an active WhatsApp connection. Please connect your device to start streaming live messages.
         </p>
-        <button 
-          onClick={() => navigate('/')} 
+        <button
+          onClick={() => navigate('/')}
           className="px-8 py-3 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-500/20 transition-all"
         >
           Go to Dashboard
@@ -128,49 +349,48 @@ export default function LiveInbox() {
   }
 
   const activeChatData = activeChatId ? chats[activeChatId] : null;
-  const chatList = Object.keys(chats).map(id => ({ id, ...chats[id] })).sort((a, b) => {
-    const lastA = a.messages[a.messages.length - 1]?.timestamp || 0;
-    const lastB = b.messages[b.messages.length - 1]?.timestamp || 0;
-    return lastB - lastA;
-  });
 
   return (
     <div className={`flex-1 flex overflow-hidden ${theme === 'dark' ? 'bg-[#0a0c10]' : 'bg-white'}`}>
-      
+
       {/* Left Sidebar: Chat List */}
       <div className={`w-full md:w-80 lg:w-96 flex flex-col shrink-0 border-r ${theme === 'dark' ? 'border-[#1e222b] bg-[#0d1015]' : 'border-slate-200 bg-slate-50'} ${activeChatId ? 'hidden md:flex' : 'flex'}`}>
-        
+
         {/* Header */}
         <div className={`h-16 flex items-center px-4 shrink-0 border-b ${theme === 'dark' ? 'border-[#1e222b]' : 'border-slate-200'}`}>
           <h2 className={`text-lg font-bold ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>Live Inbox</h2>
-          <span className="ml-auto text-xs font-semibold bg-indigo-500/10 text-indigo-500 px-2 py-1 rounded-full border border-indigo-500/20">Clean Slate</span>
+          <span className="ml-auto text-xs font-semibold bg-indigo-500/10 text-indigo-500 px-2 py-1 rounded-full border border-indigo-500/20">
+            {sidebar.length} chats
+          </span>
         </div>
 
         {/* Search */}
         <div className={`p-4 border-b ${theme === 'dark' ? 'border-[#1e222b]' : 'border-slate-200'}`}>
           <div className="relative">
             <Search className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`} />
-            <input type="text" placeholder="Search live sessions..." className={`w-full pl-9 pr-4 py-2 rounded-lg text-sm border focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all ${theme === 'dark' ? 'bg-[#16191f] border-[#1e222b] text-slate-200 placeholder-slate-500' : 'bg-white border-slate-300 text-slate-700 placeholder-slate-400'}`} />
+            <input type="text" placeholder="Search conversations..." className={`w-full pl-9 pr-4 py-2 rounded-lg text-sm border focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all ${theme === 'dark' ? 'bg-[#16191f] border-[#1e222b] text-slate-200 placeholder-slate-500' : 'bg-white border-slate-300 text-slate-700 placeholder-slate-400'}`} />
           </div>
         </div>
 
         {/* List */}
         <div className="flex-1 overflow-y-auto">
-          {chatList.length === 0 ? (
+          {sidebar.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full p-8 text-center">
               <MessageSquare className={`w-12 h-12 mb-4 opacity-50 ${theme === 'dark' ? 'text-slate-600' : 'text-slate-300'}`} />
               <p className={`text-sm font-medium ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Waiting for new messages...</p>
               <p className={`text-xs mt-2 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>Historic chats are hidden to preserve privacy.</p>
             </div>
           ) : (
-            chatList.map(chat => {
-              const lastMsg = chat.messages[chat.messages.length - 1];
+            sidebar.map(chat => {
+              const lastMsg = chat.lastMessage;
+              const preview = lastMsg?.previewText || lastMsg?.body || '';
               const isActive = activeChatId === chat.id;
-              
+              const hasLive = Boolean(chats[chat.id]?.messages?.length);
+
               return (
                 <button
                   key={chat.id}
-                  onClick={() => setActiveChatId(chat.id)}
+                  onClick={() => openChat(chat.id)}
                   className={`w-full flex items-center p-4 border-b text-left transition-colors ${theme === 'dark' ? 'border-[#1e222b]' : 'border-slate-100'} ${isActive ? (theme === 'dark' ? 'bg-[#1c2028]' : 'bg-indigo-50') : (theme === 'dark' ? 'hover:bg-[#16191f]' : 'hover:bg-slate-100')}`}
                 >
                   <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 mr-4 ${theme === 'dark' ? 'bg-[#262931]' : 'bg-slate-200'}`}>
@@ -178,14 +398,17 @@ export default function LiveInbox() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-baseline mb-1">
-                      <h3 className={`font-semibold text-sm truncate pr-2 ${theme === 'dark' ? 'text-slate-200' : 'text-slate-800'}`}>{resolveName(chat.id)}</h3>
+                      <h3 className={`font-semibold text-sm truncate pr-2 ${theme === 'dark' ? 'text-slate-200' : 'text-slate-800'}`}>{chat.displayName || resolveName(chat.id)}</h3>
                       <span className={`text-[10px] shrink-0 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
-                        {new Date((lastMsg?.timestamp || 0) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {lastMsg?.timestamp ? new Date(lastMsg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (hasLive ? 'Live' : '')}
                       </span>
                     </div>
-                    <p className={`text-xs truncate ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
-                      {lastMsg?.fromMe ? 'You: ' : ''}{lastMsg?.type === 'chat' ? lastMsg.body : '📷 Media message'}
-                    </p>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className={`text-xs truncate ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
+                        {lastMsg?.fromMe ? 'You: ' : ''}{preview || (hasLive ? 'Waiting for new messages...' : '')}
+                      </p>
+                      {hasLive && <span className={`text-[9px] shrink-0 font-bold uppercase tracking-wide ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-600'}`}>live</span>}
+                    </div>
                   </div>
                 </button>
               );
@@ -203,48 +426,62 @@ export default function LiveInbox() {
             </div>
             <h2 className={`text-2xl font-bold mb-2 ${theme === 'dark' ? 'text-white' : 'text-slate-800'}`}>CommNexus Live Inbox</h2>
             <p className={`max-w-md text-sm ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
-              Select a conversation from the sidebar to start responding to live incoming messages.
+              Select a conversation to start streaming live incoming and outgoing messages.
             </p>
           </div>
         ) : (
           <>
             {/* Chat Header */}
             <div className={`h-16 flex items-center px-6 shrink-0 border-b shadow-sm z-10 ${theme === 'dark' ? 'border-[#1e222b] bg-[#0d1015]' : 'border-slate-200 bg-white'}`}>
-              <button onClick={() => setActiveChatId(null)} className="md:hidden p-2 -ml-3 mr-2 text-slate-500">
+              <button onClick={() => { setActiveChatId(null); setReplyTo(null); }} className="md:hidden p-2 -ml-3 mr-2 text-slate-500">
                 &larr;
               </button>
               <div className={`w-9 h-9 rounded-full flex items-center justify-center mr-3 ${theme === 'dark' ? 'bg-[#1e222b]' : 'bg-slate-100'}`}>
                 <UserCircle className={`w-6 h-6 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`} />
               </div>
-              <h2 className={`font-bold text-lg truncate ${theme === 'dark' ? 'text-white' : 'text-slate-800'}`}>
-                {resolveName(activeChatId)}
-              </h2>
+              <div className="min-w-0">
+                <h2 className={`font-bold text-lg truncate ${theme === 'dark' ? 'text-white' : 'text-slate-800'}`}>
+                  {resolveName(activeChatId)}
+                </h2>
+                <p className={`text-[10px] font-semibold uppercase tracking-wide ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-600'}`}>
+                  Live streaming
+                </p>
+              </div>
             </div>
 
             {/* Chat Messages */}
             <div className={`flex-1 overflow-y-auto p-6 flex flex-col gap-4 ${theme === 'dark' ? 'bg-[#0a0c10]' : 'bg-slate-50'}`}>
-              {activeChatData.messages.map((msg, idx) => {
-                const isMe = msg.fromMe;
-                return (
-                  <div key={msg.id || idx} className={`flex flex-col max-w-[75%] ${isMe ? 'self-end' : 'self-start'}`}>
-                    <div className={`px-4 py-2.5 rounded-2xl ${isMe ? 'bg-indigo-600 text-white rounded-tr-sm shadow-indigo-500/20' : (theme === 'dark' ? 'bg-[#1e222b] text-slate-200 rounded-tl-sm' : 'bg-white border border-slate-200 text-slate-800 rounded-tl-sm')} shadow-sm`}>
-                      {msg.type === 'chat' ? (
-                        <p className="text-sm whitespace-pre-wrap break-words">{msg.body}</p>
-                      ) : (
-                        <p className="text-sm italic opacity-80">Media payload hidden (API delivery only)</p>
-                      )}
-                    </div>
-                    <span className={`text-[10px] mt-1 px-1 ${isMe ? 'text-right' : 'text-left'} ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
-                      {new Date((msg.timestamp || 0) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  </div>
-                );
-              })}
+              {!activeChatData || activeChatData.messages.length === 0 ? (
+                <div className={`flex-1 flex flex-col items-center justify-center text-center p-8 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+                  <MessageSquare className="w-10 h-10 mb-3 opacity-40" />
+                  <p className="text-sm font-medium">No live messages here yet</p>
+                  <p className="text-xs mt-1">This inbox starts clean - history is not loaded. Messages will appear here the moment they happen.</p>
+                </div>
+              ) : (
+                activeChatData.messages.map((msg, idx) => (
+                  <MessageBubble
+                    key={msgId(msg) || idx}
+                    message={msg}
+                    theme={theme}
+                    apiKey={apiKey}
+                    reactions={reactions[msgId(msg)] || []}
+                    onReply={(m) => setReplyTo(m)}
+                    onReact={sendReaction}
+                  />
+                ))
+              )}
               <div ref={messagesEndRef} />
             </div>
 
             {/* Chat Input */}
-            <ChatInputForm activeChatId={activeChatId} apiKey={apiKey} API_URL={API_URL} onMessageSent={onMessageSent} />
+            <ChatInputForm
+              activeChatId={activeChatId}
+              apiKey={apiKey}
+              API_URL={API_URL}
+              onMessageSent={onMessageSent}
+              replyTo={replyTo}
+              onClearReply={() => setReplyTo(null)}
+            />
           </>
         )}
       </div>

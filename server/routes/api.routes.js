@@ -52,9 +52,9 @@ router.get('/status', (req, res) => {
   res.json(whatsappService.getStatus());
 });
 
-// Send a message
+// Send a message (optionally as a quote/reply to another message)
 router.post('/send-message', async (req, res) => {
-  const { to, text } = req.body;
+  const { to, text, quotedMsg } = req.body;
   
   if (!to || typeof text !== 'string' || !text.trim()) {
     return res.status(400).json({ error: 'Missing "to" or "text" in request body' });
@@ -69,11 +69,30 @@ router.post('/send-message', async (req, res) => {
     const formattedTo = /@(c\.us|g\.us|lid|newsletter)$/.test(cleanTo)
       ? cleanTo
       : `${cleanTo.replace(/\D/g, '')}@c.us`;
-    const response = await whatsappService.sendMessage(formattedTo, text.trim());
+    const options = {};
+    const quoteId = quotedMsg?.id?._serialized || quotedMsg?.id?.id || quotedMsg?.id || quotedMsg;
+    if (quoteId) options.quotedMsg = quoteId;
+    const response = await whatsappService.sendMessage(formattedTo, text.trim(), options);
     console.log('Message sent successfully:', response);
     res.json(response);
   } catch (error) {
     console.error('Send message failed in API route:', error);
+    res.status(error.statusCode || 500).json({ error: error.message });
+  }
+});
+
+// Add / remove a reaction on a message. Pass an empty string to remove.
+router.post('/send-reaction', async (req, res) => {
+  const { messageId, reaction } = req.body;
+  const id = messageId?.id?._serialized || messageId?.id?.id || messageId?.id || messageId;
+  if (!id || typeof reaction !== 'string') {
+    return res.status(400).json({ error: 'messageId and reaction are required' });
+  }
+  try {
+    const response = await whatsappService.sendReaction(id, reaction);
+    res.json(response);
+  } catch (error) {
+    console.error('Send reaction failed in API route:', error);
     res.status(error.statusCode || 500).json({ error: error.message });
   }
 });

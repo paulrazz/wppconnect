@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, Code2, LogOut, MessageSquare, Menu, X, Sun, Moon, Inbox } from 'lucide-react';
 import { removeApiKey } from '../auth';
@@ -15,6 +15,28 @@ export default function Layout({ children }) {
     await removeApiKey();
     navigate('/login');
   };
+
+  // Non-dismissible "website closed" notice. It intentionally cannot be closed:
+  // no close button, overlay clicks do nothing, and Escape is swallowed.
+  useEffect(() => {
+    const preventEscape = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    const preventScroll = (event) => event.preventDefault();
+    document.addEventListener('keydown', preventEscape, true);
+    document.addEventListener('wheel', preventScroll, { passive: false });
+    document.addEventListener('touchmove', preventScroll, { passive: false });
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', preventEscape, true);
+      document.removeEventListener('wheel', preventScroll);
+      document.removeEventListener('touchmove', preventScroll);
+      document.body.style.overflow = '';
+    };
+  }, []);
 
   const navItems = [
     { path: '/inbox', icon: Inbox, label: 'Live Inbox' },
@@ -137,6 +159,24 @@ export default function Layout({ children }) {
           </motion.div>
         </AnimatePresence>
       </main>
+
+      {/* Non-dismissable full-page overlay */}
+      <div
+        className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-white dark:bg-[#0a0c10]"
+        onClick={(e) => { e.stopPropagation(); }}
+      >
+        <div className="text-center px-8 pointer-events-none select-none">
+          <div className="w-20 h-20 rounded-2xl flex items-center justify-center mb-8 mx-auto bg-slate-100 dark:bg-[#12151a] border border-slate-200 dark:border-[#1e222b]">
+            <MessageSquare className="w-10 h-10 text-slate-400 dark:text-slate-500" />
+          </div>
+          <h1 className="text-4xl sm:text-5xl font-extrabold text-slate-900 dark:text-white tracking-tight mb-4">
+            Website Closed
+          </h1>
+          <p className="text-lg text-slate-500 dark:text-slate-400 font-medium">
+            The preview is over.
+          </p>
+        </div>
+      </div>
       
     </div>
   );

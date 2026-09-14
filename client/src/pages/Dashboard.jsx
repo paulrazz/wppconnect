@@ -47,8 +47,20 @@ export default function Dashboard() {
       });
 
       socket.on('session_status', (status) => {
-        setSessionStatus(status);
-        if (status === 'CONNECTED') setQrCode(null);
+        if (status === 'CONNECTED') {
+          setQrCode(null);
+          setSessionStatus('CONNECTED');
+          return;
+        }
+        // A downgrade (DISCONNECTED / QR_READY / STARTING) can arrive from a
+        // stale socket handshake right after reload. Confirm it against the
+        // authoritative REST status before flipping the UI away from a state
+        // we just verified, so the page can't flicker "connected -> not connected".
+        axios.get(`${API_URL}/status`, { headers: { 'x-api-key': key } })
+          .then(({ data }) => {
+            if (data.status === status) setSessionStatus(status);
+          })
+          .catch(() => setSessionStatus(status));
       });
 
       socket.on('session_details', (details) => {

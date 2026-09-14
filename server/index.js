@@ -61,15 +61,14 @@ io.on('connection', (socket) => {
   // This saves massive amounts of RAM on Railway.
   // The user must click "Connect Device" to explicitly start the engine.
 
-  // Send the current status if they are the currently active session in memory
-  if (whatsappService.currentApiKey === apiKey) {
-    socket.emit('session_status', whatsappService.sessionStatus);
-    socket.emit('session_details', whatsappService.getStatus());
-    if (whatsappService.lastQrCode) socket.emit('qr_code', whatsappService.lastQrCode);
-  } else {
-    // Their session is not active in RAM right now.
-    socket.emit('session_status', 'DISCONNECTED');
-  }
+  // Report the real engine state, mirroring GET /api/status. This server runs a
+  // single global session, so any authenticated dashboard sees the same truth
+  // the REST endpoint reports - otherwise a reload could read CONNECTED from
+  // REST while the socket handshake force-reported DISCONNECTED for a client
+  // whose stored key is not the key the current session was started with.
+  socket.emit('session_status', whatsappService.sessionStatus);
+  socket.emit('session_details', whatsappService.getStatus());
+  if (whatsappService.lastQrCode) socket.emit('qr_code', whatsappService.lastQrCode);
 
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);

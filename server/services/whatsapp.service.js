@@ -271,13 +271,17 @@ class WhatsAppService {
   }
 
   registerListeners(client) {
-    client.onMessage((message) => {
+    // Listen for every chat message, including our own outgoing ones. The
+    // wppconnect `onMessage` listener filters out isSentByMe (listener.layer:
+    // `if (msg.isSentByMe || msg.isStatusV3) return;`), which is exactly why
+    // messages sent through the API used to never reach the live inbox.
+    client.onAnyMessage((message) => {
       // Preserve media while it is still downloadable. WhatsApp can remove
       // the live message immediately when the sender chooses Delete for all.
       if (['image', 'video', 'gif', 'audio', 'ptt', 'sticker', 'document'].includes(String(message.type || '').toLowerCase())) {
         void client.downloadMedia(message).then(dataUrl => eventStore.cacheMedia(message.id, dataUrl, { mimetype: message.mimetype, filename: message.filename || message.fileName })).catch(() => {});
       }
-      if (message.isStatus || message.from === 'status@broadcast') {
+      if (message.isStatus || message.isStatusV3 || message.from === 'status@broadcast') {
         const senderId = message.author || message.from;
         this.statusCache[senderId] ||= [];
         this.statusCache[senderId].push(message);
@@ -285,6 +289,16 @@ class WhatsAppService {
         eventStore.rememberStatus(message);
         this.io?.to(`session_${this.currentApiKey}`).emit('new_status', message);
         void webhooks.emit('status.received', message);
+        return;
+      }
+      if (message.fromMe || message.isSentByMe) {
+        // Outgoing message (sent from the API or any frontend). Stream it in
+        // real time so an open Live Inbox mirrors the account. eventStore and
+        // webhooks already record `message.sent` inside the send path, so we
+        // only surface it on the socket here.
+        const chatId = message.chatId?._serialized || message.chatId || message.to;
+        if (chatId) this.chatPreviewCache.set(chatId, message);
+        this.io?.to(`session_${this.currentApiKey}`).emit('new_message', message);
         return;
       }
       this.io?.to(`session_${this.currentApiKey}`).emit('new_message', message);
