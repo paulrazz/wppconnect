@@ -149,21 +149,6 @@ export default function Dashboard() {
                 </div>
               )}
             </div>
-            
-            {/* Storage info */}
-            <div className="bg-[#16191f] border border-[#262931] rounded-2xl p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-white mb-4 flex items-center">
-                <Database className="w-5 h-5 mr-2 text-indigo-400" />
-                Data Isolation
-              </h2>
-              <p className="text-sm text-slate-400 leading-relaxed mb-4">
-                Your session is cryptographically bound to your API key. Killing the engine frees up server RAM, but your data is safely retained on disk.
-              </p>
-              <div className="bg-[#0f1115] border border-[#262931] rounded-lg p-3 flex justify-between items-center">
-                <span className="text-xs text-slate-500 font-mono">Volume</span>
-                <span className="text-xs text-emerald-400 font-medium">Mounted & Secure</span>
-              </div>
-            </div>
           </div>
 
           {/* Sandbox & Analytics */}
