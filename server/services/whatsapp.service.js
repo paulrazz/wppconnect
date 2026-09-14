@@ -58,6 +58,8 @@ function hashKey(key) {
 class WhatsAppService {
   constructor() {
     this.client = null;
+    this.chatPreviewCache.clear();
+    this.contactsCache = null;
     this.currentApiKey = null;
     this.sessionStatus = 'DISCONNECTED';
     this.sessionName = 'dashboard-session';
@@ -189,6 +191,8 @@ class WhatsAppService {
       return client;
     } catch (error) {
       this.client = null;
+    this.chatPreviewCache.clear();
+    this.contactsCache = null;
       if (generation === this.lifecycleGeneration) this.setStatus('ERROR', error);
       console.error('Failed to start WhatsApp session:', error);
       throw error;
@@ -208,11 +212,11 @@ class WhatsAppService {
         this.statusCache[senderId].push(message);
         this.statusCache[senderId] = this.statusCache[senderId].slice(-25);
         eventStore.rememberStatus(message);
-        this.io?.emit('new_status', message);
+        this.io?.to(`session_${this.currentApiKey}`).emit('new_status', message);
         void webhooks.emit('status.received', message);
         return;
       }
-      this.io?.emit('new_message', message);
+      this.io?.to(`session_${this.currentApiKey}`).emit('new_message', message);
       eventStore.append('message.received', message);
       const chatId = message.chatId?._serialized || message.chatId || (message.fromMe ? message.to : message.from);
       if (chatId) this.chatPreviewCache.set(chatId, message);
@@ -222,7 +226,7 @@ class WhatsAppService {
     });
     client.onAck((ack) => {
       eventStore.append('message.ack', ack);
-      this.io?.emit('message_ack', ack);
+      this.io?.to(`session_${this.currentApiKey}`).emit('message_ack', ack);
       void webhooks.emit('message.ack', ack);
     });
     client.onRevokedMessage(async (data) => {
@@ -231,7 +235,7 @@ class WhatsAppService {
         const exact = eventStore.getMessage(referenceId);
         const original = exact || eventStore.getLatestStatus(data.author);
         const removal = eventStore.append('status.deleted', { ...data, referenceId: eventStore.idOf(referenceId), original, recoveryStatus: exact ? 'recovered' : original ? 'probable-sender-match' : 'not-observed', deletedAt: new Date().toISOString() });
-        this.io?.emit('status_deleted', removal);
+        this.io?.to(`session_${this.currentApiKey}`).emit('status_deleted', removal);
         void webhooks.emit('status.deleted', removal);
         return;
       }
@@ -242,27 +246,27 @@ class WhatsAppService {
       }
       if (original && (original.type === 'revoked' || (!original.body && !original.content && !original.caption && !original.filename && !original.mimetype))) original = null;
       const deletion = eventStore.append('message.deleted', { ...data, referenceId: eventStore.idOf(referenceId), original, recoveryStatus: original ? 'recovered' : 'not-observed', deletedAt: new Date().toISOString() });
-      this.io?.emit('message_deleted', deletion);
+      this.io?.to(`session_${this.currentApiKey}`).emit('message_deleted', deletion);
       void webhooks.emit('message.deleted', deletion);
     });
     client.onMessageEdit((data) => {
       const edit = eventStore.append('message.edited', data);
-      this.io?.emit('message_edited', edit);
+      this.io?.to(`session_${this.currentApiKey}`).emit('message_edited', edit);
       void webhooks.emit('message.edited', edit);
     });
     client.onReactionMessage((data) => {
       const reaction = eventStore.append('message.reaction', data);
-      this.io?.emit('message_reaction', reaction);
+      this.io?.to(`session_${this.currentApiKey}`).emit('message_reaction', reaction);
       void webhooks.emit('message.reaction', reaction);
     });
     client.onIncomingCall((data) => {
       const call = eventStore.append('call.received', data);
-      this.io?.emit('incoming_call', call);
+      this.io?.to(`session_${this.currentApiKey}`).emit('incoming_call', call);
       void webhooks.emit('call.received', call);
     });
     client.onStateChange((state) => {
       console.log('WhatsApp state:', state);
-      this.io?.emit('whatsapp_state', state);
+      this.io?.to(`session_${this.currentApiKey}`).emit('whatsapp_state', state);
       void webhooks.emit('whatsapp.state', { state });
       if (['CONFLICT', 'UNLAUNCHED'].includes(state)) client.useHere().catch((error) => console.warn('WhatsApp takeover skipped:', error.message));
       if (state === 'CONNECTED') this.setStatus('CONNECTED');
@@ -283,6 +287,8 @@ class WhatsAppService {
     this.lifecycleGeneration += 1;
     const client = this.client;
     this.client = null;
+    this.chatPreviewCache.clear();
+    this.contactsCache = null;
     if (client) {
       console.log(`[Memory Manager] Forcefully terminating Chromium process for session ${this.sessionName}...`);
       try {
@@ -299,6 +305,8 @@ class WhatsAppService {
     this.lifecycleGeneration += 1;
     const client = this.client;
     this.client = null;
+    this.chatPreviewCache.clear();
+    this.contactsCache = null;
     if (client) await client.logout();
     this.connectedAt = null;
     this.setStatus('DISCONNECTED');
@@ -418,7 +426,14 @@ class WhatsAppService {
       return JSON.parse(JSON.stringify(result));
     }, chatIds);
   }
-  getContacts() { return this.requireClient().getAllContacts(); }
+  async getContacts() {
+    if (this.contactsCache?.key === this.currentApiKey && (Date.now() - this.contactsCache.timestamp < 300000)) {
+      return this.contactsCache.data;
+    }
+    const data = await this.requireClient().getAllContacts();
+    this.contactsCache = { key: this.currentApiKey, timestamp: Date.now(), data };
+    return data;
+  }
   getGroups() { return this.requireClient().getAllGroups(); }
   async inspectIdentity(id) {
     const client = this.requireClient();

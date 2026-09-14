@@ -14,6 +14,9 @@ const db = new sqlite3.Database(dbPath);
 // Initialize schema
 db.serialize(() => {
   db.run(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
+    PRAGMA busy_timeout = 5000;
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       phone TEXT UNIQUE NOT NULL,
