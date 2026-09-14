@@ -4,7 +4,6 @@ if (process.env.NODE_ENV === 'production' && !process.env.WPPCONNECT_API_KEY) {
 }
 const express = require('express');
 const http = require('http');
-const path = require('path');
 const cors = require('cors');
 const { Server } = require('socket.io');
 const crypto = require('crypto');
@@ -33,12 +32,6 @@ app.use((req, res, next) => {
 
 app.use('/api', requireApiKey);
 
-// Serve built client assets
-app.use(express.static(path.join(__dirname, '../client/dist')));
-// Fallback to index.html for SPA routing
-app.get('/{*path}', (req, res) => {
-  res.sendFile(path.join(__dirname, '../client/dist', 'index.html'));
-});
 
 // Initialize Socket.io
 const io = new Server(server, {

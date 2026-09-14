@@ -1,31 +1,23 @@
 FROM node:20-slim
 
-# Install Google Chrome Stable + all its deps (official Puppeteer Docker approach)
+# Install Google Chrome Stable for Puppeteer/WhatsApp
 RUN apt-get update && apt-get install -y wget gnupg ca-certificates --no-install-recommends \
     && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
     && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update && apt-get install -y google-chrome-stable --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Tell Puppeteer to use system Chrome, skip downloading its own bundle
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 
 WORKDIR /app
 
-# Build-time env vars for Vite (baked into the JS bundle)
-ARG VITE_WPPCONNECT_API_KEY
-ENV VITE_WPPCONNECT_API_KEY=$VITE_WPPCONNECT_API_KEY
-
-# Copy ALL source first so vite can find index.html and everything else
-COPY . .
-
-# Install root deps, build client, install server deps
-RUN npm install
-RUN npm install --prefix client
-RUN npm run build --prefix client
+# Copy and install server only
+COPY server/package*.json ./server/
 RUN npm install --prefix server
+
+COPY server/ ./server/
 
 EXPOSE 8080
 
-CMD ["npm", "start"]
+CMD ["npm", "start", "--prefix", "server"]
