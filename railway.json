@@ -1,0 +1,10 @@
+{
+  "build": {
+    "command": "npm run build",
+    "outputDir": "client/dist"
+  },
+  "deploy": {
+    "startCommand": "npm start",
+    "restartPolicy": "always"
+  }
+}

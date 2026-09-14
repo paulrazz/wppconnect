@@ -1,0 +1,14 @@
+node_modules/
+client/dist/
+.env
+.env.*
+!.env.example
+
+# Authentication state and local runtime data must never be committed.
+server/tokens/
+server/whatsapp-session-data/
+server/data/*.json
+server/data/*.jsonl
+server/data/media-cache/
+*.log
+.DS_Store

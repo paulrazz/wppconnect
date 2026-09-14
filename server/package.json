@@ -1,0 +1,23 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "check": "node --check index.js && node --check routes/api.routes.js && node --check routes/v1.routes.js && node --check services/whatsapp.service.js && node --check services/webhook.service.js && node --check services/event-store.service.js && node --test test/*.test.js",
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@wppconnect-team/wppconnect": "^2.3.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "puppeteer": "^25.10.0",
+    "socket.io": "^4.8.3"
+  }
+}

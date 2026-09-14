@@ -1,0 +1,104 @@
+openapi: 3.1.0
+info:
+  title: WPPConnect Dev Platform API
+  version: 1.0.0
+  description: Programmable WhatsApp sessions, messaging, media, contacts, statuses, and webhooks.
+servers:
+  - url: http://localhost:4005/api/v1
+components:
+  securitySchemes:
+    ApiKey:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas:
+    TextMessage:
+      type: object
+      required: [to, text]
+      properties:
+        to: { type: string, examples: [15551234567] }
+        text: { type: string }
+    FileMessage:
+      type: object
+      required: [to, dataUrl, filename]
+      properties:
+        to: { type: string }
+        dataUrl: { type: string, description: Data URL containing base64 file data }
+        filename: { type: string }
+        caption: { type: string }
+    LocationMessage:
+      type: object
+      required: [to, latitude, longitude]
+      properties:
+        to: { type: string }
+        latitude: { type: number }
+        longitude: { type: number }
+        title: { type: string }
+security:
+  - ApiKey: []
+paths:
+  /capabilities:
+    get: { summary: Discover supported resources, message types, and events, responses: { '200': { description: Capabilities } } }
+  /session:
+    get: { summary: Read session readiness and connection state, responses: { '200': { description: Session state } } }
+    delete: { summary: Unlink the current WhatsApp device, responses: { '200': { description: Session unlinked } } }
+  /session/start:
+    post: { summary: Start or restore the persistent session, responses: { '202': { description: Startup accepted } } }
+  /session/stop:
+    post: { summary: Stop runtime without unlinking the device, responses: { '200': { description: Session stopped } } }
+  /chats:
+    get: { summary: List chats with normalized names and previews, responses: { '200': { description: Chats } } }
+  /chats/{chatId}/messages:
+    get:
+      summary: Read recent messages
+      parameters:
+        - { in: path, name: chatId, required: true, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 30 } }
+      responses: { '200': { description: Messages } }
+  /contacts:
+    get: { summary: List WhatsApp contacts, responses: { '200': { description: Contacts } } }
+  /groups:
+    get: { summary: List WhatsApp groups available to the linked account, responses: { '200': { description: Groups } } }
+  /statuses:
+    get: { summary: List active and recently synchronized statuses, responses: { '200': { description: Statuses } } }
+  /messages/text:
+    post:
+      summary: Send a text message
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TextMessage' } } } }
+      responses: { '201': { description: Message created } }
+  /messages/buttons:
+    post: { summary: Send URL, phone, or callback template buttons, responses: { '201': { description: Interactive message created } } }
+  /messages/list:
+    post: { summary: Send an interactive sectioned list, responses: { '201': { description: List message created } } }
+  /messages/poll:
+    post: { summary: Send a poll with selectable choices, responses: { '201': { description: Poll created } } }
+  /messages/reaction:
+    post: { summary: Add or remove a reaction on a message, responses: { '201': { description: Reaction created } } }
+  /messages/file:
+    post:
+      summary: Send a file, image, video, audio, or voice note
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/FileMessage' } } } }
+      responses: { '201': { description: Message created } }
+  /messages/sticker:
+    post: { summary: Convert an image data URL to a sticker and send it, responses: { '201': { description: Sticker created } } }
+  /messages/location:
+    post:
+      summary: Send a location
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LocationMessage' } } } }
+      responses: { '201': { description: Location message created } }
+  /messages/contact:
+    post: { summary: Send a WhatsApp contact card, responses: { '201': { description: Contact message created } } }
+  /webhooks:
+    get: { summary: List webhook subscriptions, responses: { '200': { description: Webhooks } } }
+    post: { summary: Create a signed webhook subscription, responses: { '201': { description: Webhook created } } }
+  /events:
+    get: { summary: Read the persistent append-only event ledger, responses: { '200': { description: Events } } }
+  /deleted-messages:
+    get: { summary: Read captured deleted messages and original content when available, responses: { '200': { description: Deleted-message events } } }
+  /deletions:
+    get: { summary: Read unified private-chat, group, and status deletion events, responses: { '200': { description: Deletion events } } }
+  /webhooks/{id}:
+    delete:
+      summary: Delete a webhook subscription
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Webhook deleted } }

@@ -1,0 +1,15 @@
+{
+  "name": "wppconnect-monorepo",
+  "private": true,
+  "scripts": {
+    "client:install": "npm install --prefix client",
+    "client:build": "npm run build --prefix client",
+    "server:install": "npm install --prefix server",
+    "build": "npm run client:install && npm run client:build && npm run server:install",
+    "start": "npm start --prefix server",
+    "dev": "concurrently \"npm run dev --prefix client\" \"npm run dev --prefix server\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
