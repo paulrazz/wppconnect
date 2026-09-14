@@ -115,7 +115,7 @@ class WhatsAppService {
       let profileName = null;
       let profilePic = null;
       try {
-        profileName = (await this.client.getMyProfileName().catch(() => null)) || null;
+        profileName = (await this.client.getProfileName().catch(() => null)) || null;
       } catch (_) {}
       try {
         const me = await this.client.page.evaluate(() => {

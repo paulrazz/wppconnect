@@ -150,7 +150,7 @@ export default function Dashboard() {
                         <motion.div animate={{ scale: [1, 1.2, 1], opacity: [0.5, 0, 0.5] }} transition={{ repeat: Infinity, duration: 2 }} className="absolute inset-0 border border-emerald-400 rounded-full" />
                       </div>
                     </div>
-                    <h2 className="text-3xl font-extrabold text-slate-900 dark:text-white mb-2">{metrics.profileName || 'Device Connected'}</h2>
+                    <h2 className="text-3xl font-extrabold text-slate-900 dark:text-white mb-2">{metrics.profileName || 'Your WhatsApp'}</h2>
                     <p className="text-slate-500 dark:text-slate-400 max-w-md mx-auto mb-10">
                       {metrics.profileName ? `Welcome back, ${metrics.profileName}. Your WhatsApp account is linked and ready to send and receive messages.` : 'Your WhatsApp account is successfully linked and ready to send and receive messages.'}
                     </p>
