@@ -111,7 +111,7 @@ class WhatsAppService {
     // Now start the new one
     this.currentApiKey = apiKey;
     this.sessionName = hashKey(apiKey);
-    this.sessionPath = path.resolve(__dirname, '..', 'sessions', this.sessionName);
+    this.sessionPath = path.resolve(__dirname, '..', 'data', 'sessions', this.sessionName);
     
     this.setStatus('STARTING');
     const generation = ++this.lifecycleGeneration;

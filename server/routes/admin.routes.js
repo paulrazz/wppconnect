@@ -22,7 +22,7 @@ router.get('/users', async (req, res) => {
       const hash = crypto.createHash('sha256').update(u.api_key).digest('hex').substring(0, 32);
       // Wait, sessions are stored in whatsapp-session-data/sessions/ or whatsapp-session-data/<hash>?
       // In whatsapp.service.js: path.resolve(__dirname, '..', 'sessions', this.sessionName) => server/sessions/<hash>
-      const sessionPath = path.resolve(__dirname, '..', 'sessions', hash);
+      const sessionPath = path.resolve(__dirname, '..', 'data', 'sessions', hash);
       const hasProfile = fs.existsSync(sessionPath);
       const isCurrentlyActive = whatsappService.currentApiKey === u.api_key;
       return { ...u, sessionHash: hash, hasProfile, isCurrentlyActive };
@@ -45,7 +45,7 @@ router.delete('/users/:id', async (req, res) => {
     }
     
     const hash = crypto.createHash('sha256').update(user.api_key).digest('hex').substring(0, 32);
-    const sessionPath = path.resolve(__dirname, '..', 'sessions', hash);
+    const sessionPath = path.resolve(__dirname, '..', 'data', 'sessions', hash);
     
     // Delete Chromium profile folder
     if (fs.existsSync(sessionPath)) {
