@@ -1,7 +1,7 @@
 {
   "build": {
-    "command": "npm run build",
-    "outputDir": "client/dist"
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "./Dockerfile"
   },
   "deploy": {
     "startCommand": "npm start",
