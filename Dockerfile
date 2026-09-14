@@ -13,6 +13,10 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 
 WORKDIR /app
 
+# Build-time env vars for Vite (baked into the JS bundle)
+ARG VITE_WPPCONNECT_API_KEY
+ENV VITE_WPPCONNECT_API_KEY=$VITE_WPPCONNECT_API_KEY
+
 # Copy ALL source first so vite can find index.html and everything else
 COPY . .
 

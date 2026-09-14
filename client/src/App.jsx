@@ -14,7 +14,10 @@ const API_URL = `${SERVER_URL}/api`;
 const V1_API_URL = `${API_URL}/v1`;
 const API_KEY = import.meta.env.VITE_WPPCONNECT_API_KEY || '';
 if (API_KEY) axios.defaults.headers.common['x-api-key'] = API_KEY;
+// When SERVER_URL is empty the client is served from the same origin as the server
+// so socket.io connects to window.location.origin automatically
 const socket = io(SERVER_URL || window.location.origin, { auth: API_KEY ? { apiKey: API_KEY } : undefined, extraHeaders: API_KEY ? { 'x-api-key': API_KEY } : undefined });
+
 
 const MESSAGE_TEMPLATES = {
   text: { endpoint: 'text', payload: { text: 'Hello from the API console' } },
