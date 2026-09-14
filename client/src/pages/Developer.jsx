@@ -137,40 +137,42 @@ export default function Developer() {
   ];
 
   return (
-    <div className={`flex-1 flex overflow-hidden transition-colors duration-300 ${theme === 'dark' ? 'bg-[#0a0c10] text-slate-300' : 'bg-slate-50 text-slate-700'}`}>
+    <div className={`flex-1 flex flex-col lg:flex-row overflow-hidden transition-colors duration-300 ${theme === 'dark' ? 'bg-[#0a0c10] text-slate-300' : 'bg-slate-50 text-slate-700'}`}>
       
-      {/* Sidebar Navigation */}
-      <div className={`w-64 border-r overflow-y-auto ${theme === 'dark' ? 'border-[#1e222b] bg-[#0f1115]' : 'border-slate-200 bg-white'}`}>
-        <div className="p-6">
-          <h2 className={`text-xs font-bold uppercase tracking-wider mb-4 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>API Reference</h2>
-          <nav className="space-y-1">
-            <button onClick={() => setActiveSection('auth')} className={`w-full flex items-center px-3 py-2 text-sm rounded-lg transition-colors ${activeSection === 'auth' ? (theme === 'dark' ? 'bg-indigo-500/10 text-indigo-400 font-medium' : 'bg-indigo-50 text-indigo-600 font-medium') : (theme === 'dark' ? 'text-slate-400 hover:bg-[#1e222b]' : 'text-slate-600 hover:bg-slate-100')}`}>
-              <Server className="w-4 h-4 mr-3" /> Authentication
+      {/* Sidebar Navigation (Horizontal on Mobile, Vertical on PC) */}
+      <div className={`lg:w-64 border-b lg:border-b-0 lg:border-r overflow-x-auto lg:overflow-y-auto shrink-0 ${theme === 'dark' ? 'border-[#1e222b] bg-[#0f1115]' : 'border-slate-200 bg-white'}`}>
+        <div className="p-4 lg:p-6 flex lg:flex-col items-center lg:items-stretch gap-2 lg:gap-0">
+          <h2 className={`hidden lg:block text-xs font-bold uppercase tracking-wider mb-4 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>API Reference</h2>
+          
+          <div className="flex lg:flex-col gap-2 lg:gap-1 min-w-max lg:min-w-0">
+            <button onClick={() => setActiveSection('auth')} className={`flex items-center px-4 lg:px-3 py-2 lg:py-2.5 text-sm rounded-lg transition-colors ${activeSection === 'auth' ? (theme === 'dark' ? 'bg-indigo-500/10 text-indigo-400 font-medium' : 'bg-indigo-50 text-indigo-600 font-medium') : (theme === 'dark' ? 'text-slate-400 hover:bg-[#1e222b]' : 'text-slate-600 hover:bg-slate-100')}`}>
+              <Server className="w-4 h-4 mr-2 lg:mr-3 shrink-0" /> Authentication
             </button>
-            <div className="pt-4 pb-2">
+            <div className="hidden lg:block pt-4 pb-2">
               <span className={`text-xs font-bold uppercase tracking-wider px-3 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>Endpoints</span>
             </div>
             {endpoints.map(ep => (
-              <button key={ep.id} onClick={() => setActiveSection(ep.id)} className={`w-full flex items-center px-3 py-2 text-sm rounded-lg transition-colors ${activeSection === ep.id ? (theme === 'dark' ? 'bg-indigo-500/10 text-indigo-400 font-medium' : 'bg-indigo-50 text-indigo-600 font-medium') : (theme === 'dark' ? 'text-slate-400 hover:bg-[#1e222b]' : 'text-slate-600 hover:bg-slate-100')}`}>
-                <span className={`text-[10px] font-bold mr-3 ${ep.method === 'GET' ? 'text-emerald-500' : 'text-indigo-500'}`}>{ep.method}</span>
+              <button key={ep.id} onClick={() => setActiveSection(ep.id)} className={`flex items-center px-4 lg:px-3 py-2 lg:py-2.5 text-sm rounded-lg transition-colors ${activeSection === ep.id ? (theme === 'dark' ? 'bg-indigo-500/10 text-indigo-400 font-medium' : 'bg-indigo-50 text-indigo-600 font-medium') : (theme === 'dark' ? 'text-slate-400 hover:bg-[#1e222b]' : 'text-slate-600 hover:bg-slate-100')}`}>
+                <span className={`text-[10px] font-bold mr-2 lg:mr-3 shrink-0 ${ep.method === 'GET' ? 'text-emerald-500' : 'text-indigo-500'}`}>{ep.method}</span>
                 {ep.title}
               </button>
             ))}
-            <button onClick={() => setActiveSection('webhooks')} className={`w-full flex items-center px-3 py-2 text-sm rounded-lg transition-colors mt-4 ${activeSection === 'webhooks' ? (theme === 'dark' ? 'bg-indigo-500/10 text-indigo-400 font-medium' : 'bg-indigo-50 text-indigo-600 font-medium') : (theme === 'dark' ? 'text-slate-400 hover:bg-[#1e222b]' : 'text-slate-600 hover:bg-slate-100')}`}>
-              <Webhook className="w-4 h-4 mr-3" /> Webhooks
+            <button onClick={() => setActiveSection('webhooks')} className={`flex items-center px-4 lg:px-3 py-2 lg:py-2.5 text-sm rounded-lg transition-colors lg:mt-4 ${activeSection === 'webhooks' ? (theme === 'dark' ? 'bg-indigo-500/10 text-indigo-400 font-medium' : 'bg-indigo-50 text-indigo-600 font-medium') : (theme === 'dark' ? 'text-slate-400 hover:bg-[#1e222b]' : 'text-slate-600 hover:bg-slate-100')}`}>
+              <Webhook className="w-4 h-4 mr-2 lg:mr-3 shrink-0" /> Webhooks
             </button>
-          </nav>
+          </div>
         </div>
       </div>
 
-      {/* Main Content (2-Column API Layout) */}
-      <div className="flex-1 flex overflow-hidden">
+      {/* Main Content (2-Column API Layout on PC, Stacked on Mobile) */}
+      <div className="flex-1 flex flex-col xl:flex-row overflow-y-auto xl:overflow-hidden">
+        
         {/* Left: Documentation */}
-        <div className={`flex-1 overflow-y-auto p-10 lg:p-12 border-r ${theme === 'dark' ? 'border-[#1e222b]' : 'border-slate-200'}`}>
-          <div className="max-w-3xl">
+        <div className={`flex-1 overflow-y-visible xl:overflow-y-auto p-6 lg:p-10 xl:p-12 border-b xl:border-b-0 xl:border-r ${theme === 'dark' ? 'border-[#1e222b]' : 'border-slate-200'}`}>
+          <div className="max-w-3xl mx-auto xl:mx-0">
             
-            <div className="flex items-center justify-between mb-8">
-              <h1 className={`text-4xl font-extrabold tracking-tight ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
+              <h1 className={`text-3xl sm:text-4xl font-extrabold tracking-tight ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>
                 {activeSection === 'auth' ? 'Authentication' : 
                  activeSection === 'webhooks' ? 'Webhooks' : 
                  endpoints.find(e => e.id === activeSection)?.title}
@@ -179,7 +181,7 @@ export default function Developer() {
               {/* Theme Switcher */}
               <button 
                 onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
-                className={`text-xs font-semibold px-3 py-1.5 rounded-full border transition-colors ${theme === 'dark' ? 'bg-[#1e222b] border-[#2a2f3a] text-slate-300 hover:text-white' : 'bg-slate-200 border-slate-300 text-slate-700 hover:bg-slate-300'}`}
+                className={`shrink-0 text-xs font-semibold px-4 py-2 rounded-full border transition-colors ${theme === 'dark' ? 'bg-[#1e222b] border-[#2a2f3a] text-slate-300 hover:text-white' : 'bg-slate-200 border-slate-300 text-slate-700 hover:bg-slate-300'}`}
               >
                 Theme: {theme === 'dark' ? 'Dark' : 'Light'}
               </button>
@@ -190,16 +192,16 @@ export default function Developer() {
                 
                 {activeSection === 'auth' && (
                   <div className="space-y-6">
-                    <p className={`text-lg leading-relaxed ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>
+                    <p className={`text-base sm:text-lg leading-relaxed ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>
                       CommNexus uses API keys to authenticate requests. You can view and manage your API keys in the Dashboard.
                     </p>
-                    <div className={`p-6 rounded-xl border ${theme === 'dark' ? 'bg-[#12151a] border-[#1e222b]' : 'bg-white border-slate-200 shadow-sm'}`}>
+                    <div className={`p-4 sm:p-6 rounded-xl border ${theme === 'dark' ? 'bg-[#12151a] border-[#1e222b]' : 'bg-white border-slate-200 shadow-sm'}`}>
                       <h3 className={`text-sm font-bold uppercase tracking-wider mb-4 ${theme === 'dark' ? 'text-slate-300' : 'text-slate-800'}`}>Your Secret Key</h3>
-                      <div className="flex items-center">
-                        <code className={`flex-1 font-mono text-sm px-4 py-3 rounded-l-lg border ${theme === 'dark' ? 'bg-[#0a0c10] border-[#262931] text-emerald-400' : 'bg-slate-50 border-slate-300 text-emerald-600'}`}>
+                      <div className="flex items-center w-full">
+                        <code className={`flex-1 font-mono text-xs sm:text-sm px-3 sm:px-4 py-3 rounded-l-lg border overflow-x-auto whitespace-nowrap ${theme === 'dark' ? 'bg-[#0a0c10] border-[#262931] text-emerald-400' : 'bg-slate-50 border-slate-300 text-emerald-600'}`}>
                           {apiKey || 'Loading...'}
                         </code>
-                        <button onClick={() => copyToClipboard(apiKey, 'apikey')} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-3 rounded-r-lg transition-colors border border-indigo-600">
+                        <button onClick={() => copyToClipboard(apiKey, 'apikey')} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-3 rounded-r-lg transition-colors border border-indigo-600 shrink-0">
                           {copied === 'apikey' ? <Check size={20} /> : <Copy size={20} />}
                         </button>
                       </div>
@@ -301,7 +303,7 @@ export default function Developer() {
         </div>
 
         {/* Right: Interactive Code View */}
-        <div className={`w-[45%] flex flex-col ${theme === 'dark' ? 'bg-[#0d1015]' : 'bg-[#1e1e1e]'}`}>
+        <div className={`w-full xl:w-[45%] flex flex-col shrink-0 min-h-[500px] xl:min-h-0 ${theme === 'dark' ? 'bg-[#0d1015]' : 'bg-[#1e1e1e]'}`}>
           
           {/* Language Tabs */}
           <div className="flex px-4 pt-4 space-x-1 bg-[#18181b]">
