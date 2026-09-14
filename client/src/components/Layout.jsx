@@ -69,26 +69,41 @@ export default function Layout({ children }) {
   );
 
   return (
-    <div className="flex h-screen bg-[#0a0c10] text-slate-300 font-sans selection:bg-indigo-500/30 overflow-hidden">
+    <div className="flex h-screen bg-[#0a0c10] text-slate-300 font-sans selection:bg-indigo-500/30 overflow-hidden flex-col">
       
-      {/* Desktop Sidebar (Glassmorphic) */}
-      <aside className="w-64 bg-[#0d1015]/80 backdrop-blur-2xl border-r border-[#1e222b] flex-col justify-between hidden md:flex relative z-50">
-        <SidebarContent />
-      </aside>
+      {/* Universal Top Header */}
+      <div className="h-16 flex items-center justify-between px-4 sm:px-6 border-b border-[#1e222b] bg-[#0d1015]/80 backdrop-blur-xl z-30 shrink-0">
+        <div className="flex items-center">
+          <button onClick={() => setMobileMenuOpen(true)} className="p-2 mr-4 text-slate-400 hover:text-white rounded-lg bg-[#16191f] border border-[#1e222b] transition-colors">
+            <Menu size={20} />
+          </button>
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold mr-3 shadow-lg shadow-indigo-500/20">
+            <MessageSquare size={16} />
+          </div>
+          <span className="text-white font-extrabold tracking-tight text-lg">CommNexus</span>
+        </div>
+      </div>
 
-      {/* Mobile Sidebar Overlay */}
+      {/* Universal Sidebar Overlay Modal */}
       <AnimatePresence>
         {mobileMenuOpen && (
           <>
             <motion.div 
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               onClick={() => setMobileMenuOpen(false)}
-              className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 md:hidden"
+              className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
             />
             <motion.aside 
               initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} transition={{ type: 'spring', bounce: 0, duration: 0.4 }}
-              className="fixed top-0 left-0 bottom-0 w-64 bg-[#0d1015] border-r border-[#1e222b] flex flex-col justify-between z-50 md:hidden"
+              className="fixed top-0 left-0 bottom-0 w-64 bg-[#0d1015] border-r border-[#1e222b] flex flex-col justify-between z-50 shadow-2xl"
             >
+              {/* Close Button Inside Modal */}
+              <button 
+                onClick={() => setMobileMenuOpen(false)} 
+                className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white rounded-lg bg-[#16191f] border border-[#1e222b] transition-colors z-50"
+              >
+                <X size={18} />
+              </button>
               <SidebarContent />
             </motion.aside>
           </>
@@ -97,20 +112,6 @@ export default function Layout({ children }) {
 
       {/* Main Content Area with Page Transitions */}
       <main className="flex-1 flex flex-col relative bg-[#0a0c10] overflow-hidden">
-        
-        {/* Mobile Top Header */}
-        <div className="md:hidden h-16 flex items-center justify-between px-4 border-b border-[#1e222b] bg-[#0d1015]/80 backdrop-blur-xl z-30 shrink-0">
-          <div className="flex items-center">
-             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold mr-3">
-              <MessageSquare size={16} />
-            </div>
-            <span className="text-white font-extrabold tracking-tight">CommNexus</span>
-          </div>
-          <button onClick={() => setMobileMenuOpen(true)} className="p-2 text-slate-400 hover:text-white rounded-lg bg-[#16191f] border border-[#1e222b]">
-            <Menu size={20} />
-          </button>
-        </div>
-
         <AnimatePresence mode="wait">
           <motion.div 
             key={location.pathname}

@@ -165,11 +165,11 @@ export default function Developer() {
       </div>
 
       {/* Main Content (2-Column API Layout on PC, Stacked on Mobile) */}
-      <div className="flex-1 flex flex-col xl:flex-row overflow-y-auto xl:overflow-hidden">
+      <div className="flex-1 grid grid-cols-1 xl:grid-cols-12 overflow-y-auto xl:overflow-hidden">
         
         {/* Left: Documentation */}
-        <div className={`flex-1 overflow-y-visible xl:overflow-y-auto p-6 lg:p-10 xl:p-12 border-b xl:border-b-0 xl:border-r ${theme === 'dark' ? 'border-[#1e222b]' : 'border-slate-200'}`}>
-          <div className="max-w-3xl mx-auto xl:mx-0">
+        <div className={`xl:col-span-7 overflow-y-visible xl:overflow-y-auto p-6 lg:p-10 xl:p-12 border-b xl:border-b-0 xl:border-r ${theme === 'dark' ? 'border-[#1e222b]' : 'border-slate-200'}`}>
+          <div className="max-w-3xl mx-auto xl:mx-0 min-w-0">
             
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
               <h1 className={`text-3xl sm:text-4xl font-extrabold tracking-tight ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>
@@ -303,7 +303,7 @@ export default function Developer() {
         </div>
 
         {/* Right: Interactive Code View */}
-        <div className={`w-full xl:w-[45%] flex flex-col shrink-0 min-h-[500px] xl:min-h-0 ${theme === 'dark' ? 'bg-[#0d1015]' : 'bg-[#1e1e1e]'}`}>
+        <div className={`xl:col-span-5 flex flex-col shrink-0 min-h-[500px] xl:min-h-0 ${theme === 'dark' ? 'bg-[#0d1015]' : 'bg-[#1e1e1e]'}`}>
           
           {/* Language Tabs */}
           <div className="flex px-4 pt-4 space-x-1 bg-[#18181b]">
