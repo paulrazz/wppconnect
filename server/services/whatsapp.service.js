@@ -157,8 +157,6 @@ class WhatsAppService {
             '--disable-gpu',
             '--disable-dev-shm-usage',
             '--no-first-run',
-            '--no-zygote',
-            '--single-process', // Vastly reduces memory on single-instance containers
             '--disable-background-networking',
             '--disable-default-apps',
             '--disable-extensions',
@@ -174,7 +172,8 @@ class WhatsAppService {
             '--ignore-ssl-errors',
             '--disable-component-update',
             '--disable-features=TranslateUI,BlinkGenPropertyTrees',
-            '--disable-client-side-phishing-detection'
+            '--disable-client-side-phishing-detection',
+            '--disable-software-rasterizer',
           ],
         },
       });
