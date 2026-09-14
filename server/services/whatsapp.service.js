@@ -1,3 +1,4 @@
+const fs = require('fs');
 const path = require('path');
 const wppconnect = require('@wppconnect-team/wppconnect');
 const puppeteer = require('puppeteer');
@@ -71,6 +72,8 @@ class WhatsAppService {
     this.chatPreviewCache = new Map();
     this.passiveMode = true;
     this.lifecycleGeneration = 0;
+    this.deviceInfo = { battery: null, platform: null, network: null, apiStatus: 'Active', updatedAt: null };
+    this.metricsTimer = null;
   }
 
   setIo(io) { this.io = io; }
@@ -80,6 +83,7 @@ class WhatsAppService {
     this.lastError = error ? (error.message || String(error)) : null;
     if (status !== 'QR_READY') this.lastQrCode = null;
     if (status === 'CONNECTED') this.connectedAt = new Date().toISOString();
+    if (status === 'CONNECTED') void this.refreshDeviceInfo();
     
     if (this.currentApiKey) {
       const room = `session_${this.currentApiKey}`;
@@ -90,7 +94,30 @@ class WhatsAppService {
   }
 
   getStatus() {
-    return { status: this.sessionStatus, ready: this.sessionStatus === 'CONNECTED' && Boolean(this.client), session: this.sessionName, connectedAt: this.connectedAt, lastError: this.lastError, passiveMode: this.passiveMode, readReceipts: 'disabled' };
+    return { status: this.sessionStatus, ready: this.sessionStatus === 'CONNECTED' && Boolean(this.client), session: this.sessionName, connectedAt: this.connectedAt, lastError: this.lastError, passiveMode: this.passiveMode, readReceipts: 'disabled', info: this.deviceInfo };
+  }
+
+  async refreshDeviceInfo() {
+    if (!this.client || this.sessionStatus !== 'CONNECTED') {
+      this.deviceInfo.network = 'Offline';
+      return;
+    }
+    try {
+      const batteryRaw = await this.client.getBatteryLevel().catch(() => null);
+      const battery = typeof batteryRaw === 'number' ? Math.round(batteryRaw) : (batteryRaw && typeof batteryRaw === 'object' && batteryRaw.battery != null ? Math.round(Number(batteryRaw.battery)) : null);
+
+      const platformRaw = await this.client.page.evaluate(() => {
+        try { return window.WPP?.conn?.getPlatform?.() || null; } catch (_) { return null; }
+      }).catch(() => null);
+      const platform = platformRaw === 'iphone' ? 'iOS' : platformRaw === 'android' ? 'Android' : platformRaw === 'wp' ? 'Windows Phone' : platformRaw;
+
+      const socketState = await this.client.getConnectionState().catch(() => null);
+      const network = socketState === 'CONNECTED' ? 'Stable' : socketState === 'SYNCING' ? 'Syncing' : socketState === 'TIMEOUT' ? 'Reconnecting' : socketState || null;
+
+      this.deviceInfo = { battery, platform, network, apiStatus: 'Active', updatedAt: new Date().toISOString() };
+    } catch (_) {
+      this.deviceInfo = { ...this.deviceInfo, updatedAt: new Date().toISOString() };
+    }
   }
 
   async ensureSessionActive(apiKey) {
@@ -123,8 +150,20 @@ class WhatsAppService {
     return this.ensureSessionActive(apiKey || this.currentApiKey);
   }
 
+  cleanChromeLocks() {
+    // A hard container kill / redeploy leaves a stale Chrome SingletonLock in the
+    // persisted profile. On the next boot Chrome thinks the profile is in use by
+    // "another computer", refuses to open it (locked profile + 'Can't open display').
+    // Remove only the runtime lock files - auth data (LevelDB/Default) is untouched.
+    for (const file of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+      const p = path.join(this.sessionPath, file);
+      try { fs.rmSync(p, { force: true }); } catch (_) {}
+    }
+  }
+
   async createClient(generation) {
     try {
+      this.cleanChromeLocks();
       const client = await wppconnect.create({
         session: this.sessionName,
         folderNameToken: path.resolve(__dirname, '..', 'data', 'sessions'),
@@ -188,6 +227,9 @@ class WhatsAppService {
       this.setStatus('CONNECTED');
       this.registerListeners(client);
       console.log(`WhatsApp session ready (${this.sessionPath})`);
+      clearInterval(this.metricsTimer);
+      this.metricsTimer = setInterval(() => void this.refreshDeviceInfo(), 30000);
+      if (this.metricsTimer.unref) this.metricsTimer.unref();
       return client;
     } catch (error) {
       this.client = null;
@@ -285,6 +327,8 @@ class WhatsAppService {
 
   async stopSession() {
     this.lifecycleGeneration += 1;
+    clearInterval(this.metricsTimer);
+    this.metricsTimer = null;
     const client = this.client;
     this.client = null;
     this.chatPreviewCache.clear();
@@ -329,18 +373,16 @@ class WhatsAppService {
     const client = this.requireClient();
     let id = String(to || '').trim();
 
-    // Auto-format phone numbers for users who don't include @c.us
-    if (!id.includes('@')) {
-      // Strip all non-numeric characters (spaces, +, -, etc.)
-      let cleaned = id.replace(/\D/g, '');
-      
-      // If the number starts with '0' (local format), replace it with Nigeria's '234'
-      if (cleaned.startsWith('0')) {
-        cleaned = '234' + cleaned.substring(1);
+    // Normalize any local phone format to the full E.164 chat JID. Handles
+    // "09034040635", "+2349034040635" AND "09034040635@c.us" (which the API
+    // route pre-appends) - a leading '0' means Nigeria national format.
+    if (!id.includes('@') || /^\+?\d+@c\.us$/.test(id)) {
+      const digitsMatch = id.replace(/@c\.us$/, '').replace(/\D/g, '');
+      if (/^\d+$/.test(digitsMatch)) {
+        let digits = digitsMatch;
+        if (digits.startsWith('0')) digits = '234' + digits.substring(1);
+        id = `${digits}@c.us`;
       }
-      
-      // Append the standard WhatsApp contact suffix
-      id = `${cleaned}@c.us`;
     }
 
     if (!id.endsWith('@lid')) return id;

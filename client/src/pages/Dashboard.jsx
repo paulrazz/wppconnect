@@ -146,19 +146,19 @@ export default function Dashboard() {
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl mx-auto mb-10 text-left">
                       <div className="bg-slate-50 dark:bg-[#0f1115] border border-slate-200 dark:border-[#1e222b] p-4 rounded-xl">
                         <div className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2 flex items-center"><Battery className="w-3 h-3 mr-1.5" /> Battery</div>
-                        <div className="text-xl font-medium text-slate-900 dark:text-white">{metrics.battery ? `${metrics.battery}%` : '100%'}</div>
+                        <div className="text-xl font-medium text-slate-900 dark:text-white">{metrics.battery != null ? `${metrics.battery}%` : '—'}</div>
                       </div>
                       <div className="bg-slate-50 dark:bg-[#0f1115] border border-slate-200 dark:border-[#1e222b] p-4 rounded-xl">
                         <div className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2 flex items-center"><MonitorSmartphone className="w-3 h-3 mr-1.5" /> Platform</div>
-                        <div className="text-xl font-medium text-slate-900 dark:text-white">{metrics.platform || 'iOS / Android'}</div>
+                        <div className="text-xl font-medium text-slate-900 dark:text-white">{metrics.platform || '—'}</div>
                       </div>
                       <div className="bg-slate-50 dark:bg-[#0f1115] border border-slate-200 dark:border-[#1e222b] p-4 rounded-xl">
                         <div className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2 flex items-center"><Wifi className="w-3 h-3 mr-1.5" /> Network</div>
-                        <div className="text-xl font-medium text-emerald-400">Stable</div>
+                        <div className={`text-xl font-medium ${metrics.network === 'Stable' ? 'text-emerald-400' : metrics.network === 'Syncing' ? 'text-amber-400' : 'text-slate-400'}`}>{metrics.network || '—'}</div>
                       </div>
                       <div className="bg-slate-50 dark:bg-[#0f1115] border border-slate-200 dark:border-[#1e222b] p-4 rounded-xl">
                         <div className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2 flex items-center"><Cpu className="w-3 h-3 mr-1.5" /> API Status</div>
-                        <div className="text-xl font-medium text-indigo-400">Active</div>
+                        <div className={`text-xl font-medium ${metrics.apiStatus === 'Active' ? 'text-indigo-400' : 'text-rose-400'}`}>{metrics.apiStatus || 'Active'}</div>
                       </div>
                     </div>
 
