@@ -143,7 +143,7 @@ export default function Dashboard() {
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl mx-auto mb-10 text-left">
                       <div className="bg-[#0f1115] border border-[#1e222b] p-4 rounded-xl">
                         <div className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2 flex items-center"><Battery className="w-3 h-3 mr-1.5" /> Battery</div>
-                        <div className="text-xl font-medium text-white">{metrics.battery ? \`\${metrics.battery}%\` : '100%'}</div>
+                        <div className="text-xl font-medium text-white">{metrics.battery ? `${metrics.battery}%` : '100%'}</div>
                       </div>
                       <div className="bg-[#0f1115] border border-[#1e222b] p-4 rounded-xl">
                         <div className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2 flex items-center"><MonitorSmartphone className="w-3 h-3 mr-1.5" /> Platform</div>

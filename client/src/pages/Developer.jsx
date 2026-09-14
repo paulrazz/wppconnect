@@ -38,6 +38,7 @@ export default function Developer() {
   const [testResult, setTestResult] = useState(null);
   const [isTesting, setIsTesting] = useState(false);
   const [activeSection, setActiveSection] = useState('auth');
+  const [playgroundModal, setPlaygroundModal] = useState({ isOpen: false, endpoint: null });
 
   useEffect(() => {
     getApiKey().then(setApiKey);
@@ -47,6 +48,14 @@ export default function Developer() {
     navigator.clipboard.writeText(text);
     setCopied(id);
     setTimeout(() => setCopied(''), 2000);
+  };
+
+  const openPlayground = (ep) => {
+    if (ep.method === 'GET') {
+      handleTestAPI(ep.path, ep.method); // GET requests don't need a modal payload
+    } else {
+      setPlaygroundModal({ isOpen: true, endpoint: ep });
+    }
   };
 
   const handleTestAPI = async (endpoint, method, payload = null) => {
@@ -61,7 +70,18 @@ export default function Developer() {
       });
       setTestResult({ success: true, data: res.data });
     } catch (err) {
-      setTestResult({ success: false, data: err.response?.data || { error: err.message } });
+      let errorMsg = err.response?.data?.error || err.message;
+      // Sanitize internal server paths or node stack traces
+      if (typeof errorMsg === 'string' && (errorMsg.includes('/app/') || errorMsg.includes('node_modules') || errorMsg.includes('node:'))) {
+        errorMsg = 'An internal server error occurred while processing the request.';
+      }
+      setTestResult({ 
+        success: false, 
+        data: { 
+          error: errorMsg,
+          code: err.response?.status || 500
+        } 
+      });
     } finally {
       setIsTesting(false);
     }
@@ -252,12 +272,12 @@ export default function Developer() {
 
                     <div className="pt-6">
                       <button
-                        onClick={() => handleTestAPI(ep.path, ep.method, ep.payload)}
+                        onClick={() => openPlayground(ep)}
                         disabled={isTesting}
                         className={`flex items-center justify-center w-full py-4 rounded-xl font-bold transition-all disabled:opacity-50 ${theme === 'dark' ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-200'}`}
                       >
                         {isTesting ? <LoaderCircle className="w-5 h-5 mr-2 animate-spin" /> : <PlayCircle className="w-5 h-5 mr-2" />}
-                        {isTesting ? 'Executing Request...' : 'Run Test Request'}
+                        {isTesting ? 'Executing Request...' : 'Open Test Playground'}
                       </button>
                     </div>
 
@@ -325,6 +345,69 @@ export default function Developer() {
         </div>
 
       </div>
+
+      {/* Test Playground Modal */}
+      <AnimatePresence>
+        {playgroundModal.isOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-[#12151a] border border-[#1e222b] rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col"
+            >
+              <div className="flex items-center justify-between px-6 py-4 border-b border-[#1e222b] bg-[#16191f]">
+                <h2 className="text-lg font-bold text-white flex items-center">
+                  <PlayCircle className="w-5 h-5 mr-2 text-indigo-400" />
+                  Test {playgroundModal.endpoint.title}
+                </h2>
+                <button onClick={() => setPlaygroundModal({ isOpen: false, endpoint: null })} className="text-slate-400 hover:text-white">
+                  ✕
+                </button>
+              </div>
+              
+              <div className="p-6 overflow-y-auto max-h-[70vh]">
+                <form id="playground-form" onSubmit={(e) => {
+                  e.preventDefault();
+                  const fd = new FormData(e.target);
+                  const newPayload = {};
+                  Object.keys(playgroundModal.endpoint.payload).forEach(key => {
+                    let val = fd.get(key);
+                    if (Array.isArray(playgroundModal.endpoint.payload[key])) {
+                      val = val.split(',').map(s => s.trim()).filter(Boolean);
+                    }
+                    newPayload[key] = val;
+                  });
+                  setPlaygroundModal({ isOpen: false, endpoint: null });
+                  handleTestAPI(playgroundModal.endpoint.path, playgroundModal.endpoint.method, newPayload);
+                }} className="space-y-4">
+                  {Object.entries(playgroundModal.endpoint.payload).map(([key, val]) => (
+                    <div key={key}>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">{key}</label>
+                      {typeof val === 'string' && val.startsWith('data:image') ? (
+                         <input type="text" name={key} defaultValue={val} className="w-full bg-[#0a0c10] border border-[#1e222b] rounded-lg py-2.5 px-3 text-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-xs" />
+                      ) : Array.isArray(val) ? (
+                        <textarea name={key} defaultValue={val.join(', ')} rows="2" placeholder="Comma separated values" className="w-full bg-[#0a0c10] border border-[#1e222b] rounded-lg py-2.5 px-3 text-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-sm resize-none" />
+                      ) : (
+                        <textarea name={key} defaultValue={val} rows={key === 'text' || key === 'caption' ? 3 : 1} className="w-full bg-[#0a0c10] border border-[#1e222b] rounded-lg py-2.5 px-3 text-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-sm resize-none" />
+                      )}
+                      <p className="text-[10px] text-slate-500 mt-1">Expected: {Array.isArray(val) ? 'Array (comma separated)' : typeof val}</p>
+                    </div>
+                  ))}
+                </form>
+              </div>
+
+              <div className="p-4 border-t border-[#1e222b] bg-[#16191f] flex justify-end space-x-3">
+                <button onClick={() => setPlaygroundModal({ isOpen: false, endpoint: null })} className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition-colors">Cancel</button>
+                <button type="submit" form="playground-form" className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-lg shadow-lg shadow-indigo-500/20 transition-all flex items-center">
+                  Execute <Terminal className="w-4 h-4 ml-2" />
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
     </div>
   );
 }
