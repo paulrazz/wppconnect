@@ -54,6 +54,7 @@ router.delete('/users/:id', async (req, res) => {
     
     // Delete from SQLite
     await DB.run('DELETE FROM users WHERE id = ?', [req.params.id]);
+    require('../lib/http').validApiKeys.delete(user.api_key);
     res.json({ success: true, message: 'User and Chromium profile permanently deleted.' });
   } catch (err) {
     res.status(500).json({ error: err.message });

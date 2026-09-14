@@ -58,8 +58,6 @@ function hashKey(key) {
 class WhatsAppService {
   constructor() {
     this.client = null;
-    this.chatPreviewCache.clear();
-    this.contactsCache = null;
     this.currentApiKey = null;
     this.sessionStatus = 'DISCONNECTED';
     this.sessionName = 'dashboard-session';

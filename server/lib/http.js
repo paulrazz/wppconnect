@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const DB = require('./db');
 
 function apiError(statusCode, code, message) {
   const error = new Error(message);
@@ -18,12 +19,28 @@ function timingSafeEqual(left, right) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-function requireApiKey(req, res, next) {
+// In-memory cache to prevent DB lookups on every single API request
+const validApiKeys = new Set();
+
+async function requireApiKey(req, res, next) {
   if (req.path === '/provision' || req.path === '/v1/provision' || req.path.startsWith('/auth/')) return next();
 
   const apiKey = suppliedApiKey(req);
   if (!apiKey || apiKey.length < 32) {
     return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'A valid API key is required' }, meta: { requestId: res.locals.requestId } });
+  }
+
+  // Security & Optimization: Validate API key exists in DB before booting Chromium (prevents DoS)
+  if (!validApiKeys.has(apiKey)) {
+    try {
+      const user = await DB.get('SELECT id FROM users WHERE api_key = ?', [apiKey]);
+      if (!user) {
+        return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Invalid API key' }, meta: { requestId: res.locals.requestId } });
+      }
+      validApiKeys.add(apiKey);
+    } catch (err) {
+      return next(apiError(500, 'DB_ERROR', 'Failed to validate API key'));
+    }
   }
 
   // Bring the user's session into memory (swapping out whoever is currently active)
@@ -43,4 +60,4 @@ function corsOrigin(origin, callback) {
   callback(apiError(403, 'ORIGIN_NOT_ALLOWED', 'This origin is not allowed'));
 }
 
-module.exports = { apiError, requireApiKey, suppliedApiKey, timingSafeEqual, corsOrigin };
+module.exports = { apiError, requireApiKey, suppliedApiKey, timingSafeEqual, corsOrigin, validApiKeys };
