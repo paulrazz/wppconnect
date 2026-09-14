@@ -306,7 +306,22 @@ class WhatsAppService {
   async resetSession() { await this.stopSession(); return this.startSession(); }
   async resolveDestination(to) {
     const client = this.requireClient();
-    const id = String(to || '').trim();
+    let id = String(to || '').trim();
+
+    // Auto-format phone numbers for users who don't include @c.us
+    if (!id.includes('@')) {
+      // Strip all non-numeric characters (spaces, +, -, etc.)
+      let cleaned = id.replace(/\D/g, '');
+      
+      // If the number starts with '0' (local format), replace it with Nigeria's '234'
+      if (cleaned.startsWith('0')) {
+        cleaned = '234' + cleaned.substring(1);
+      }
+      
+      // Append the standard WhatsApp contact suffix
+      id = `${cleaned}@c.us`;
+    }
+
     if (!id.endsWith('@lid')) return id;
     try {
       const mapping = await client.getPnLidEntry(id);
