@@ -110,7 +110,7 @@ class WhatsAppService {
         updatesLog: false,
         deviceName: 'WPPConnect Dev Console',
         puppeteerOptions: {
-          executablePath: await puppeteer.executablePath(),
+          executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || await puppeteer.executablePath(),
           userDataDir: this.sessionPath,
           args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-crash-reporter', '--disable-gpu', '--disable-dev-shm-usage'],
         },
