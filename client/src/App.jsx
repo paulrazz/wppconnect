@@ -8,6 +8,7 @@ import { ThemeProvider } from './ThemeContext';
 // Lazy load heavy routes to split the bundle and optimize initial load
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Developer = lazy(() => import('./pages/Developer'));
+const LiveInbox = lazy(() => import('./pages/LiveInbox'));
 const Login = lazy(() => import('./pages/Login'));
 
 const PremiumLoader = () => (
@@ -46,6 +47,7 @@ export default function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
             <Route path="/developer" element={<PrivateRoute><Developer /></PrivateRoute>} />
+            <Route path="/inbox" element={<PrivateRoute><LiveInbox /></PrivateRoute>} />
           </Routes>
         </Suspense>
       </BrowserRouter>

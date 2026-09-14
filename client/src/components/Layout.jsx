@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Code2, LogOut, MessageSquare, Menu, X, Sun, Moon } from 'lucide-react';
+import { LayoutDashboard, Code2, LogOut, MessageSquare, Menu, X, Sun, Moon, Inbox } from 'lucide-react';
 import { removeApiKey } from '../auth';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTheme } from '../ThemeContext';
@@ -17,6 +17,7 @@ export default function Layout({ children }) {
   };
 
   const navItems = [
+    { path: '/inbox', icon: Inbox, label: 'Live Inbox' },
     { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
     { path: '/developer', icon: Code2, label: 'Developer API' },
   ];

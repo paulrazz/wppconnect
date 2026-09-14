@@ -2,7 +2,8 @@ import { useState, useEffect, memo } from 'react';
 import { useTheme } from '../ThemeContext';
 import axios from 'axios';
 import { getApiKey } from '../auth';
-import { Code2, Copy, Check, Terminal, PlayCircle, LoaderCircle, Webhook, Activity, FileText, MessageSquare, Server, Image as ImageIcon, Users } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Code2, Copy, Lock, Check, Terminal, PlayCircle, LoaderCircle, Webhook, Activity, FileText, MessageSquare, Server, Image as ImageIcon, Users } from 'lucide-react';
 import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
 import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash';
 import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript';
@@ -33,6 +34,7 @@ const CodeBlock = memo(({ language, code, theme }) => (
 
 export default function Developer() {
   const [apiKey, setApiKey] = useState('');
+  const [sessionStatus, setSessionStatus] = useState('LOADING');
   const [copied, setCopied] = useState('');
   const [activeLang, setActiveLang] = useState('curl');
   const { theme } = useTheme();
@@ -40,9 +42,15 @@ export default function Developer() {
   const [isTesting, setIsTesting] = useState(false);
   const [activeSection, setActiveSection] = useState('auth');
   const [playgroundModal, setPlaygroundModal] = useState({ isOpen: false, endpoint: null });
+  const navigate = useNavigate();
 
   useEffect(() => {
-    getApiKey().then(setApiKey);
+    getApiKey().then(key => {
+      setApiKey(key);
+      axios.get(`/api/status`, { headers: { 'x-api-key': key } })
+        .then(res => setSessionStatus(res.data.status))
+        .catch(() => setSessionStatus('DISCONNECTED'));
+    });
   }, []);
 
   const copyToClipboard = (text, id) => {
@@ -136,6 +144,37 @@ export default function Developer() {
       payload: { groupName: "VIP Customers", participants: ["1234567890@c.us", "0987654321@c.us"] }
     }
   ];
+
+  if (sessionStatus === 'LOADING') {
+    return (
+      <div className={`flex-1 flex flex-col items-center justify-center ${theme === 'dark' ? 'bg-[#0a0c10] text-indigo-400' : 'bg-slate-50 text-indigo-600'}`}>
+        <LoaderCircle className="w-10 h-10 animate-spin mb-4" />
+        <span className="font-bold tracking-widest uppercase text-sm">Verifying Session...</span>
+      </div>
+    );
+  }
+
+  if (sessionStatus !== 'CONNECTED') {
+    return (
+      <div className={`flex-1 flex flex-col items-center justify-center p-6 text-center ${theme === 'dark' ? 'bg-[#0a0c10]' : 'bg-slate-50'}`}>
+        <div className={`w-20 h-20 rounded-2xl flex items-center justify-center mb-6 shadow-2xl ${theme === 'dark' ? 'bg-[#12151a] border border-[#1e222b] text-slate-500' : 'bg-white border border-slate-200 text-slate-400'}`}>
+          <Lock className="w-10 h-10" />
+        </div>
+        <h1 className={`text-3xl font-extrabold tracking-tight mb-4 ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>
+          API Keys Locked
+        </h1>
+        <p className={`max-w-md mb-8 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>
+          Your API Keys are securely locked. Please connect your WhatsApp device to generate and view your active API credentials.
+        </p>
+        <button 
+          onClick={() => navigate('/')} 
+          className="px-8 py-3 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-500/20 transition-all"
+        >
+          Go to Dashboard
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className={`flex-1 flex flex-col lg:flex-row overflow-hidden transition-colors duration-300 ${theme === 'dark' ? 'bg-[#0a0c10] text-slate-300' : 'bg-slate-50 text-slate-700'}`}>
@@ -315,7 +354,7 @@ export default function Developer() {
           <div className="flex-1 relative overflow-y-auto">
             {activeSection === 'auth' ? (
               <div className="p-6">
-                <CodeBlock language="bash" theme="dark" code={`# All requests must include the x-api-key header\ncurl -X GET ${SERVER_URL}/api/status \\\n  -H "x-api-key: YOUR_API_KEY"`} />
+                <CodeBlock language="bash" theme="dark" code={`# All requests must include the x-api-key header\ncurl -X GET /api/status \\\n  -H "x-api-key: YOUR_API_KEY"`} />
               </div>
             ) : activeSection === 'webhooks' ? (
               <div className="p-6">
