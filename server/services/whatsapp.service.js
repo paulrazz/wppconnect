@@ -162,6 +162,8 @@ class WhatsAppService {
             '--disable-default-apps',
             '--disable-extensions',
             '--disable-sync',
+            '--disk-cache-size=10485760',
+            '--media-cache-size=10485760',
             '--disable-translate',
             '--hide-scrollbars',
             '--metrics-recording-only',
@@ -287,16 +289,29 @@ class WhatsAppService {
     this.client = null;
     this.chatPreviewCache.clear();
     this.contactsCache = null;
+
     if (client) {
       console.log(`[Memory Manager] Forcefully terminating Chromium process for session ${this.sessionName}...`);
       try {
         const browser = await client.page.browser();
         if (browser) browser.process().kill('SIGKILL');
-      } catch (err) {
-        // Ignore errors if browser is already dead
-      }
+      } catch (err) {}
       await client.close().catch(() => {});
+      
+      // Aggressive Disk Optimization for Free Tier Limits (Wipe junk caches)
+      try {
+        const path = require('path');
+        const fs = require('fs');
+        const junkFolders = ['Cache', 'Code Cache', 'GPUCache', 'DawnWebGPUCache', 'Service Worker/CacheStorage'];
+        for (const folder of junkFolders) {
+          const target = path.join(this.sessionPath, 'Default', folder);
+          if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
+        }
+      } catch (e) {
+        console.error('Disk cleanup failed:', e.message);
+      }
     }
+
     this.setStatus('DISCONNECTED');
   }
   async logoutSession() {
