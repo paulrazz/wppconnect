@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from
 import { getApiKey } from './auth';
 import { LoaderCircle } from 'lucide-react';
 import Layout from './components/Layout';
+import GodModeListener from './components/GodModeListener';
 import { ThemeProvider } from './ThemeContext';
 
 // Lazy load heavy routes to split the bundle and optimize initial load
@@ -10,6 +11,7 @@ const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Developer = lazy(() => import('./pages/Developer'));
 const LiveInbox = lazy(() => import('./pages/LiveInbox'));
 const Login = lazy(() => import('./pages/Login'));
+const AdminCore = lazy(() => import('./pages/AdminCore'));
 
 const PremiumLoader = () => (
   <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-[#0a0c10] text-indigo-400">
@@ -42,9 +44,11 @@ export default function App() {
   return (
     <ThemeProvider>
       <BrowserRouter>
+        <GodModeListener />
         <Suspense fallback={<PremiumLoader />}>
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/admin-core" element={<Suspense fallback={<PremiumLoader />}><AdminCore /></Suspense>} />
             <Route path="/" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
             <Route path="/developer" element={<PrivateRoute><Developer /></PrivateRoute>} />
             <Route path="/inbox" element={<PrivateRoute><LiveInbox /></PrivateRoute>} />
