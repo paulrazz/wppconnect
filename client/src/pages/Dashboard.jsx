@@ -190,14 +190,14 @@ export default function Dashboard() {
 
                 ) : (
                   <motion.div key="offline" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center">
-                    <div className="w-24 h-24 bg-slate-50 dark:bg-[#0f1115] border border-slate-200 dark:border-[#1e222b] text-slate-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <div className="w-24 h-24 bg-slate-50 dark:bg-[#0f1115] border border-slate-200 dark:border-[#1e222b] text-slate-400 dark:text-slate-600 rounded-full flex items-center justify-center mx-auto mb-6">
                       <Smartphone className="w-10 h-10" />
                     </div>
                     <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">Disconnected</h2>
                     <p className="text-slate-500 dark:text-slate-400 max-w-sm mx-auto mb-8 text-sm">
                       Your WhatsApp session is currently offline. Click below to start the connection process.
                     </p>
-                    <button onClick={handleStartSession} disabled={sessionStatus === 'STARTING'} className="px-8 py-4 rounded-xl font-extrabold text-slate-900 dark:text-white bg-indigo-600 hover:bg-indigo-500 border border-indigo-500 shadow-lg shadow-indigo-500/20 transition-all flex items-center justify-center mx-auto disabled:opacity-50">
+                    <button onClick={handleStartSession} disabled={sessionStatus === 'STARTING'} className="px-8 py-4 rounded-xl font-extrabold text-white bg-indigo-600 hover:bg-indigo-500 border border-indigo-500 shadow-lg shadow-indigo-500/20 transition-all flex items-center justify-center mx-auto disabled:opacity-50">
                       {sessionStatus === 'STARTING' ? <LoaderCircle className="w-5 h-5 mr-3 animate-spin" /> : <PlayCircle className="w-5 h-5 mr-3" />}
                       {sessionStatus === 'STARTING' ? 'CONNECTING...' : 'CONNECT DEVICE'}
                     </button>
@@ -219,15 +219,15 @@ export default function Dashboard() {
             <form onSubmit={handleSendTest} className="space-y-5 flex-1 flex flex-col">
               <div>
                 <label className="block text-xs font-bold tracking-wider text-slate-500 dark:text-slate-400 uppercase mb-2">Destination Number</label>
-                <input type="text" required value={sandboxTo} onChange={e => setSandboxTo(e.target.value)} placeholder="15551234567" className="w-full bg-slate-50 dark:bg-[#0a0c10] border border-slate-200 dark:border-[#1e222b] rounded-xl py-3 px-4 text-slate-200 placeholder-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all font-mono text-sm" />
+                <input type="text" required value={sandboxTo} onChange={e => setSandboxTo(e.target.value)} placeholder="15551234567" className="w-full bg-slate-50 dark:bg-[#0a0c10] border border-slate-200 dark:border-[#1e222b] rounded-xl py-3 px-4 text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all font-mono text-sm" />
               </div>
               
               <div className="flex-1 flex flex-col">
                 <label className="block text-xs font-bold tracking-wider text-slate-500 dark:text-slate-400 uppercase mb-2">Message</label>
-                <textarea required value={sandboxText} onChange={e => setSandboxText(e.target.value)} placeholder="Type a message..." className="w-full flex-1 min-h-[120px] bg-slate-50 dark:bg-[#0a0c10] border border-slate-200 dark:border-[#1e222b] rounded-xl py-3 px-4 text-slate-200 placeholder-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none resize-none transition-all text-sm" />
+                <textarea required value={sandboxText} onChange={e => setSandboxText(e.target.value)} placeholder="Type a message..." className="w-full flex-1 min-h-[120px] bg-slate-50 dark:bg-[#0a0c10] border border-slate-200 dark:border-[#1e222b] rounded-xl py-3 px-4 text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none resize-none transition-all text-sm" />
               </div>
 
-              <button type="submit" disabled={isSending || sessionStatus !== 'CONNECTED'} className="w-full py-3.5 rounded-xl font-bold text-slate-900 dark:text-white bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 transition-all flex items-center justify-center">
+              <button type="submit" disabled={isSending || sessionStatus !== 'CONNECTED'} className="w-full py-3.5 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 transition-all flex items-center justify-center">
                 {isSending ? <LoaderCircle className="w-5 h-5 mr-2 animate-spin" /> : <Send className="w-5 h-5 mr-2" />}
                 {isSending ? 'SENDING...' : 'SEND MESSAGE'}
               </button>

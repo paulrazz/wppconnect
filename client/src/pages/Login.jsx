@@ -60,14 +60,14 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0f1115] flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans">
+    <div className="min-h-screen bg-slate-50 dark:bg-[#0f1115] flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         <div className="flex justify-center">
           <div className="w-14 h-14 rounded-xl bg-indigo-500 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
             <MessageSquare size={32} />
           </div>
         </div>
-        <h2 className="mt-6 text-center text-3xl font-extrabold text-white tracking-tight">
+        <h2 className="mt-6 text-center text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
           CommNexus
         </h2>
         <p className="mt-2 text-center text-sm text-slate-400">
@@ -76,47 +76,47 @@ export default function Login() {
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-[#16191f] shadow sm:rounded-xl border border-[#262931] overflow-hidden">
+        <div className="bg-white dark:bg-[#16191f] shadow sm:rounded-xl border border-slate-200 dark:border-[#262931] overflow-hidden">
           
-          <div className="flex border-b border-[#262931]">
-            <button onClick={() => { setActiveTab('login'); setError(''); setSuccessMsg(''); }} className={`flex-1 py-4 text-sm font-medium transition-colors ${activeTab === 'login' ? 'text-indigo-400 bg-[#1c2028] border-b-2 border-indigo-500' : 'text-slate-500 hover:text-slate-300'}`}>Log In</button>
-            <button onClick={() => { setActiveTab('signup'); setError(''); setSuccessMsg(''); }} className={`flex-1 py-4 text-sm font-medium transition-colors ${activeTab === 'signup' ? 'text-indigo-400 bg-[#1c2028] border-b-2 border-indigo-500' : 'text-slate-500 hover:text-slate-300'}`}>Sign Up</button>
+          <div className="flex border-b border-slate-200 dark:border-[#262931]">
+            <button onClick={() => { setActiveTab('login'); setError(''); setSuccessMsg(''); }} className={`flex-1 py-4 text-sm font-medium transition-colors ${activeTab === 'login' ? 'text-indigo-400 bg-indigo-50 dark:bg-[#1c2028] border-b-2 border-indigo-500' : 'text-slate-500 hover:text-slate-700 dark:text-slate-300'}`}>Log In</button>
+            <button onClick={() => { setActiveTab('signup'); setError(''); setSuccessMsg(''); }} className={`flex-1 py-4 text-sm font-medium transition-colors ${activeTab === 'signup' ? 'text-indigo-400 bg-indigo-50 dark:bg-[#1c2028] border-b-2 border-indigo-500' : 'text-slate-500 hover:text-slate-700 dark:text-slate-300'}`}>Sign Up</button>
           </div>
 
           <div className="p-6 sm:px-10 py-8">
             <form className="space-y-5" onSubmit={activeTab === 'login' ? handleLogin : activeTab === 'signup' ? handleSignup : handleReset}>
               
               <div>
-                <label className="block text-sm font-medium text-slate-300">Phone Number</label>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Phone Number</label>
                 <div className="mt-2 relative rounded-md shadow-sm">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                     <Phone className="h-5 w-5 text-slate-500" />
                   </div>
-                  <input required type="text" value={phone} onChange={(e) => setPhone(e.target.value)} className="block w-full pl-10 bg-[#0f1115] border border-[#262931] rounded-lg py-3 text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 sm:text-sm" placeholder="e.g. 15551234567" />
+                  <input required type="text" value={phone} onChange={(e) => setPhone(e.target.value)} className="block w-full pl-10 bg-slate-50 dark:bg-[#0f1115] border border-slate-200 dark:border-[#262931] rounded-lg py-3 text-slate-900 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 sm:text-sm" placeholder="e.g. 15551234567" />
                 </div>
               </div>
 
               {activeTab === 'reset' && (
                 <div>
-                  <label className="block text-sm font-medium text-slate-300">Recovery Code</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Recovery Code</label>
                   <div className="mt-2 relative rounded-md shadow-sm">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                       <KeyRound className="h-5 w-5 text-slate-500" />
                     </div>
-                    <input required type="text" value={recoveryCode} onChange={(e) => setRecoveryCode(e.target.value)} className="block w-full pl-10 bg-[#0f1115] border border-[#262931] rounded-lg py-3 text-slate-200 uppercase placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 sm:text-sm" placeholder="e.g. A1B2C3D4" />
+                    <input required type="text" value={recoveryCode} onChange={(e) => setRecoveryCode(e.target.value)} className="block w-full pl-10 bg-slate-50 dark:bg-[#0f1115] border border-slate-200 dark:border-[#262931] rounded-lg py-3 text-slate-900 dark:text-slate-200 uppercase placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 sm:text-sm" placeholder="e.g. A1B2C3D4" />
                   </div>
                 </div>
               )}
 
               <div>
-                <label className="block text-sm font-medium text-slate-300">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
                   {activeTab === 'reset' ? 'New Password' : 'Password'}
                 </label>
                 <div className="mt-2 relative rounded-md shadow-sm">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                     <Lock className="h-5 w-5 text-slate-500" />
                   </div>
-                  <input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="block w-full pl-10 bg-[#0f1115] border border-[#262931] rounded-lg py-3 text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 sm:text-sm" placeholder="••••••••" minLength={6} />
+                  <input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="block w-full pl-10 bg-slate-50 dark:bg-[#0f1115] border border-slate-200 dark:border-[#262931] rounded-lg py-3 text-slate-900 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 sm:text-sm" placeholder="••••••••" minLength={6} />
                 </div>
               </div>
 
@@ -130,11 +130,11 @@ export default function Login() {
               {successMsg && (
                 <div className="text-sm text-emerald-400 bg-emerald-500/10 p-4 rounded-lg border border-emerald-500/20">
                   <p className="font-bold mb-2 uppercase tracking-wide">Save this Recovery Code</p>
-                  <p className="font-mono text-lg mb-4 text-white p-2 bg-[#0f1115] rounded border border-emerald-500/30 inline-block">
+                  <p className="font-mono text-lg mb-4 text-slate-900 dark:text-white p-2 bg-slate-50 dark:bg-[#0f1115] rounded border border-emerald-500/30 inline-block">
                     {successMsg.split(': ')[1]}
                   </p>
                   <p className="text-xs text-slate-400 mb-4">You must save this code somewhere safe. If you forget your password, this code is the only way to recover your account.</p>
-                  <button type="button" onClick={() => navigate('/')} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2 rounded transition-colors">
+                  <button type="button" onClick={() => navigate('/')} className="w-full bg-emerald-600 hover:bg-emerald-700 text-slate-900 dark:text-white font-medium py-2 rounded transition-colors">
                     I saved it, continue
                   </button>
                 </div>
@@ -160,7 +160,7 @@ export default function Login() {
             
             {activeTab === 'reset' && !successMsg && (
               <div className="mt-6 text-center">
-                <button onClick={() => { setActiveTab('login'); setError(''); }} className="text-sm text-slate-400 hover:text-slate-300 font-medium transition-colors">
+                <button onClick={() => { setActiveTab('login'); setError(''); }} className="text-sm text-slate-400 hover:text-slate-700 dark:text-slate-300 font-medium transition-colors">
                   Back to login
                 </button>
               </div>

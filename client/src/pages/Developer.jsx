@@ -157,7 +157,7 @@ export default function Developer() {
   if (sessionStatus !== 'CONNECTED') {
     return (
       <div className={`flex-1 flex flex-col items-center justify-center p-6 text-center ${theme === 'dark' ? 'bg-[#0a0c10]' : 'bg-slate-50'}`}>
-        <div className={`w-20 h-20 rounded-2xl flex items-center justify-center mb-6 shadow-2xl ${theme === 'dark' ? 'bg-[#12151a] border border-[#1e222b] text-slate-500' : 'bg-white border border-slate-200 text-slate-400'}`}>
+        <div className={`w-20 h-20 rounded-2xl flex items-center justify-center mb-6 shadow-2xl ${theme === 'dark' ? 'bg-white dark:bg-[#12151a] border-slate-200 dark:border-[#1e222b] text-slate-500' : 'bg-white border border-slate-200 text-slate-400'}`}>
           <Lock className="w-10 h-10" />
         </div>
         <h1 className={`text-3xl font-extrabold tracking-tight mb-4 ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>
@@ -389,9 +389,9 @@ export default function Developer() {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-[#12151a] border border-[#1e222b] rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col"
+              className="bg-white dark:bg-[#12151a] border-slate-200 dark:border-[#1e222b] rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col"
             >
-              <div className="flex items-center justify-between px-6 py-4 border-b border-[#1e222b] bg-[#16191f]">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-[#1e222b] bg-slate-100 dark:bg-[#16191f]">
                 <h2 className="text-lg font-bold text-white flex items-center">
                   <PlayCircle className="w-5 h-5 mr-2 text-indigo-400" />
                   Test {playgroundModal.endpoint.title}
@@ -420,11 +420,11 @@ export default function Developer() {
                     <div key={key}>
                       <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">{key}</label>
                       {typeof val === 'string' && val.startsWith('data:image') ? (
-                         <input type="text" name={key} defaultValue={val} className="w-full bg-[#0a0c10] border border-[#1e222b] rounded-lg py-2.5 px-3 text-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-xs" />
+                         <input type="text" name={key} defaultValue={val} className="w-full bg-slate-50 dark:bg-[#0a0c10] border-slate-200 dark:border-[#1e222b] rounded-lg py-2.5 px-3 text-slate-900 dark:text-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-xs" />
                       ) : Array.isArray(val) ? (
-                        <textarea name={key} defaultValue={val.join(', ')} rows="2" placeholder="Comma separated values" className="w-full bg-[#0a0c10] border border-[#1e222b] rounded-lg py-2.5 px-3 text-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-sm resize-none" />
+                        <textarea name={key} defaultValue={val.join(', ')} rows="2" placeholder="Comma separated values" className="w-full bg-slate-50 dark:bg-[#0a0c10] border-slate-200 dark:border-[#1e222b] rounded-lg py-2.5 px-3 text-slate-900 dark:text-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-sm resize-none" />
                       ) : (
-                        <textarea name={key} defaultValue={val} rows={key === 'text' || key === 'caption' ? 3 : 1} className="w-full bg-[#0a0c10] border border-[#1e222b] rounded-lg py-2.5 px-3 text-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-sm resize-none" />
+                        <textarea name={key} defaultValue={val} rows={key === 'text' || key === 'caption' ? 3 : 1} className="w-full bg-slate-50 dark:bg-[#0a0c10] border-slate-200 dark:border-[#1e222b] rounded-lg py-2.5 px-3 text-slate-900 dark:text-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-sm resize-none" />
                       )}
                       <p className="text-[10px] text-slate-500 mt-1">Expected: {Array.isArray(val) ? 'Array (comma separated)' : typeof val}</p>
                     </div>
@@ -432,7 +432,7 @@ export default function Developer() {
                 </form>
               </div>
 
-              <div className="p-4 border-t border-[#1e222b] bg-[#16191f] flex justify-end space-x-3">
+              <div className="p-4 border-t border-slate-200 dark:border-[#1e222b] bg-slate-100 dark:bg-[#16191f] flex justify-end space-x-3">
                 <button onClick={() => setPlaygroundModal({ isOpen: false, endpoint: null })} className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition-colors">Cancel</button>
                 <button type="submit" form="playground-form" className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-lg shadow-lg shadow-indigo-500/20 transition-all flex items-center">
                   Execute <Terminal className="w-4 h-4 ml-2" />

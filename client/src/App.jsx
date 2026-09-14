@@ -12,7 +12,7 @@ const LiveInbox = lazy(() => import('./pages/LiveInbox'));
 const Login = lazy(() => import('./pages/Login'));
 
 const PremiumLoader = () => (
-  <div className="h-screen w-screen flex flex-col items-center justify-center bg-[#0a0c10] text-indigo-400">
+  <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-[#0a0c10] text-indigo-400">
     <div className="relative flex items-center justify-center">
       <div className="absolute inset-0 bg-indigo-500/20 blur-xl rounded-full animate-pulse" />
       <LoaderCircle className="w-10 h-10 animate-spin relative z-10" />
