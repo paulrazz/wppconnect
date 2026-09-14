@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from
 import { getApiKey } from './auth';
 import { LoaderCircle } from 'lucide-react';
 import Layout from './components/Layout';
+import { ThemeProvider } from './ThemeContext';
 
 // Lazy load heavy routes to split the bundle and optimize initial load
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -38,14 +39,16 @@ function PrivateRoute({ children }) {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Suspense fallback={<PremiumLoader />}>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
-          <Route path="/developer" element={<PrivateRoute><Developer /></PrivateRoute>} />
-        </Routes>
-      </Suspense>
-    </BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter>
+        <Suspense fallback={<PremiumLoader />}>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="/" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
+            <Route path="/developer" element={<PrivateRoute><Developer /></PrivateRoute>} />
+          </Routes>
+        </Suspense>
+      </BrowserRouter>
+    </ThemeProvider>
   );
 }

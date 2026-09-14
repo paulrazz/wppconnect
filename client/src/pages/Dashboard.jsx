@@ -95,17 +95,17 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 lg:p-10 bg-[#0a0c10]">
+    <div className="flex-1 overflow-y-auto p-6 lg:p-10 bg-slate-50 dark:bg-[#0a0c10]">
       <div className="max-w-7xl mx-auto space-y-8">
         
         {/* Header */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-[#12151a] p-6 rounded-2xl border border-[#1e222b]">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white dark:bg-[#12151a] p-6 rounded-2xl border border-slate-200 dark:border-[#1e222b]">
           <div>
-            <h1 className="text-3xl font-extrabold text-white tracking-tight mb-2 flex items-center">
+            <h1 className="text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight mb-2 flex items-center">
               <Server className="w-8 h-8 mr-3 text-indigo-500" />
               Device Manager
             </h1>
-            <p className="text-slate-400 text-sm font-medium">Manage your WhatsApp connection and device health.</p>
+            <p className="text-slate-500 dark:text-slate-400 text-sm font-medium">Manage your WhatsApp connection and device health.</p>
           </div>
           <div className="mt-4 md:mt-0 flex flex-col items-end">
             <StatusIndicator />
@@ -118,7 +118,7 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
           
           {/* Main Connection Screen */}
-          <div className="xl:col-span-2 relative bg-[#12151a] border border-[#1e222b] rounded-2xl p-8 overflow-hidden shadow-2xl">
+          <div className="xl:col-span-2 relative bg-white dark:bg-[#12151a] border border-slate-200 dark:border-[#1e222b] rounded-2xl p-8 overflow-hidden shadow-2xl">
             {/* Background ambient glow */}
             <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[80%] h-[400px] bg-indigo-500/10 blur-[100px] pointer-events-none rounded-full" />
 
@@ -134,26 +134,26 @@ export default function Dashboard() {
                         <motion.div animate={{ scale: [1, 1.2, 1], opacity: [0.5, 0, 0.5] }} transition={{ repeat: Infinity, duration: 2 }} className="absolute inset-0 border border-emerald-400 rounded-full" />
                       </div>
                     </div>
-                    <h2 className="text-3xl font-extrabold text-white mb-2">Device Connected</h2>
-                    <p className="text-slate-400 max-w-md mx-auto mb-10">
+                    <h2 className="text-3xl font-extrabold text-slate-900 dark:text-white mb-2">Device Connected</h2>
+                    <p className="text-slate-500 dark:text-slate-400 max-w-md mx-auto mb-10">
                       Your WhatsApp account is successfully linked and ready to send and receive messages.
                     </p>
 
                     {/* Device Metrics Grid */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl mx-auto mb-10 text-left">
-                      <div className="bg-[#0f1115] border border-[#1e222b] p-4 rounded-xl">
+                      <div className="bg-slate-50 dark:bg-[#0f1115] border border-slate-200 dark:border-[#1e222b] p-4 rounded-xl">
                         <div className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2 flex items-center"><Battery className="w-3 h-3 mr-1.5" /> Battery</div>
-                        <div className="text-xl font-medium text-white">{metrics.battery ? `${metrics.battery}%` : '100%'}</div>
+                        <div className="text-xl font-medium text-slate-900 dark:text-white">{metrics.battery ? `${metrics.battery}%` : '100%'}</div>
                       </div>
-                      <div className="bg-[#0f1115] border border-[#1e222b] p-4 rounded-xl">
+                      <div className="bg-slate-50 dark:bg-[#0f1115] border border-slate-200 dark:border-[#1e222b] p-4 rounded-xl">
                         <div className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2 flex items-center"><MonitorSmartphone className="w-3 h-3 mr-1.5" /> Platform</div>
-                        <div className="text-xl font-medium text-white">{metrics.platform || 'iOS / Android'}</div>
+                        <div className="text-xl font-medium text-slate-900 dark:text-white">{metrics.platform || 'iOS / Android'}</div>
                       </div>
-                      <div className="bg-[#0f1115] border border-[#1e222b] p-4 rounded-xl">
+                      <div className="bg-slate-50 dark:bg-[#0f1115] border border-slate-200 dark:border-[#1e222b] p-4 rounded-xl">
                         <div className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2 flex items-center"><Wifi className="w-3 h-3 mr-1.5" /> Network</div>
                         <div className="text-xl font-medium text-emerald-400">Stable</div>
                       </div>
-                      <div className="bg-[#0f1115] border border-[#1e222b] p-4 rounded-xl">
+                      <div className="bg-slate-50 dark:bg-[#0f1115] border border-slate-200 dark:border-[#1e222b] p-4 rounded-xl">
                         <div className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2 flex items-center"><Cpu className="w-3 h-3 mr-1.5" /> API Status</div>
                         <div className="text-xl font-medium text-indigo-400">Active</div>
                       </div>
@@ -179,25 +179,25 @@ export default function Dashboard() {
                       </div>
                     </div>
                     
-                    <h2 className="text-2xl font-bold text-white mb-3 flex items-center">
+                    <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-3 flex items-center">
                       <Activity className="w-6 h-6 mr-2 text-indigo-400 animate-pulse" />
                       Link Your Device
                     </h2>
-                    <p className="text-slate-400 text-center max-w-sm mb-6 text-sm">
+                    <p className="text-slate-500 dark:text-slate-400 text-center max-w-sm mb-6 text-sm">
                       Open WhatsApp on your phone, navigate to <strong>Linked Devices</strong>, and scan the QR code above to connect.
                     </p>
                   </motion.div>
 
                 ) : (
                   <motion.div key="offline" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center">
-                    <div className="w-24 h-24 bg-[#0f1115] border border-[#1e222b] text-slate-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <div className="w-24 h-24 bg-slate-50 dark:bg-[#0f1115] border border-slate-200 dark:border-[#1e222b] text-slate-600 rounded-full flex items-center justify-center mx-auto mb-6">
                       <Smartphone className="w-10 h-10" />
                     </div>
-                    <h2 className="text-2xl font-bold text-white mb-2">Disconnected</h2>
-                    <p className="text-slate-400 max-w-sm mx-auto mb-8 text-sm">
+                    <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">Disconnected</h2>
+                    <p className="text-slate-500 dark:text-slate-400 max-w-sm mx-auto mb-8 text-sm">
                       Your WhatsApp session is currently offline. Click below to start the connection process.
                     </p>
-                    <button onClick={handleStartSession} disabled={sessionStatus === 'STARTING'} className="px-8 py-4 rounded-xl font-extrabold text-white bg-indigo-600 hover:bg-indigo-500 border border-indigo-500 shadow-lg shadow-indigo-500/20 transition-all flex items-center justify-center mx-auto disabled:opacity-50">
+                    <button onClick={handleStartSession} disabled={sessionStatus === 'STARTING'} className="px-8 py-4 rounded-xl font-extrabold text-slate-900 dark:text-white bg-indigo-600 hover:bg-indigo-500 border border-indigo-500 shadow-lg shadow-indigo-500/20 transition-all flex items-center justify-center mx-auto disabled:opacity-50">
                       {sessionStatus === 'STARTING' ? <LoaderCircle className="w-5 h-5 mr-3 animate-spin" /> : <PlayCircle className="w-5 h-5 mr-3" />}
                       {sessionStatus === 'STARTING' ? 'CONNECTING...' : 'CONNECT DEVICE'}
                     </button>
@@ -209,8 +209,8 @@ export default function Dashboard() {
           </div>
 
           {/* Sandbox Panel */}
-          <div className="xl:col-span-1 bg-[#12151a] border border-[#1e222b] rounded-2xl p-6 shadow-xl flex flex-col">
-            <h2 className="text-lg font-extrabold text-white mb-1 flex items-center">
+          <div className="xl:col-span-1 bg-white dark:bg-[#12151a] border border-slate-200 dark:border-[#1e222b] rounded-2xl p-6 shadow-xl flex flex-col">
+            <h2 className="text-lg font-extrabold text-slate-900 dark:text-white mb-1 flex items-center">
               <Send className="w-5 h-5 mr-2 text-indigo-400" />
               Test Connection
             </h2>
@@ -218,16 +218,16 @@ export default function Dashboard() {
 
             <form onSubmit={handleSendTest} className="space-y-5 flex-1 flex flex-col">
               <div>
-                <label className="block text-xs font-bold tracking-wider text-slate-400 uppercase mb-2">Destination Number</label>
-                <input type="text" required value={sandboxTo} onChange={e => setSandboxTo(e.target.value)} placeholder="15551234567" className="w-full bg-[#0a0c10] border border-[#1e222b] rounded-xl py-3 px-4 text-slate-200 placeholder-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all font-mono text-sm" />
+                <label className="block text-xs font-bold tracking-wider text-slate-500 dark:text-slate-400 uppercase mb-2">Destination Number</label>
+                <input type="text" required value={sandboxTo} onChange={e => setSandboxTo(e.target.value)} placeholder="15551234567" className="w-full bg-slate-50 dark:bg-[#0a0c10] border border-slate-200 dark:border-[#1e222b] rounded-xl py-3 px-4 text-slate-200 placeholder-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all font-mono text-sm" />
               </div>
               
               <div className="flex-1 flex flex-col">
-                <label className="block text-xs font-bold tracking-wider text-slate-400 uppercase mb-2">Message</label>
-                <textarea required value={sandboxText} onChange={e => setSandboxText(e.target.value)} placeholder="Type a message..." className="w-full flex-1 min-h-[120px] bg-[#0a0c10] border border-[#1e222b] rounded-xl py-3 px-4 text-slate-200 placeholder-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none resize-none transition-all text-sm" />
+                <label className="block text-xs font-bold tracking-wider text-slate-500 dark:text-slate-400 uppercase mb-2">Message</label>
+                <textarea required value={sandboxText} onChange={e => setSandboxText(e.target.value)} placeholder="Type a message..." className="w-full flex-1 min-h-[120px] bg-slate-50 dark:bg-[#0a0c10] border border-slate-200 dark:border-[#1e222b] rounded-xl py-3 px-4 text-slate-200 placeholder-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none resize-none transition-all text-sm" />
               </div>
 
-              <button type="submit" disabled={isSending || sessionStatus !== 'CONNECTED'} className="w-full py-3.5 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 transition-all flex items-center justify-center">
+              <button type="submit" disabled={isSending || sessionStatus !== 'CONNECTED'} className="w-full py-3.5 rounded-xl font-bold text-slate-900 dark:text-white bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 transition-all flex items-center justify-center">
                 {isSending ? <LoaderCircle className="w-5 h-5 mr-2 animate-spin" /> : <Send className="w-5 h-5 mr-2" />}
                 {isSending ? 'SENDING...' : 'SEND MESSAGE'}
               </button>

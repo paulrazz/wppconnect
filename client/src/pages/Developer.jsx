@@ -1,4 +1,5 @@
 import { useState, useEffect, memo } from 'react';
+import { useTheme } from '../ThemeContext';
 import axios from 'axios';
 import { getApiKey } from '../auth';
 import { Code2, Copy, Check, Terminal, PlayCircle, LoaderCircle, Webhook, Activity, FileText, MessageSquare, Server, Image as ImageIcon, Users } from 'lucide-react';
@@ -34,7 +35,7 @@ export default function Developer() {
   const [apiKey, setApiKey] = useState('');
   const [copied, setCopied] = useState('');
   const [activeLang, setActiveLang] = useState('curl');
-  const [theme, setTheme] = useState('dark');
+  const { theme } = useTheme();
   const [testResult, setTestResult] = useState(null);
   const [isTesting, setIsTesting] = useState(false);
   const [activeSection, setActiveSection] = useState('auth');
@@ -178,13 +179,6 @@ export default function Developer() {
                  endpoints.find(e => e.id === activeSection)?.title}
               </h1>
               
-              {/* Theme Switcher */}
-              <button 
-                onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
-                className={`shrink-0 text-xs font-semibold px-4 py-2 rounded-full border transition-colors ${theme === 'dark' ? 'bg-[#1e222b] border-[#2a2f3a] text-slate-300 hover:text-white' : 'bg-slate-200 border-slate-300 text-slate-700 hover:bg-slate-300'}`}
-              >
-                Theme: {theme === 'dark' ? 'Dark' : 'Light'}
-              </button>
             </div>
 
             <AnimatePresence mode="wait">
