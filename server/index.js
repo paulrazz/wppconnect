@@ -10,6 +10,7 @@ const crypto = require('crypto');
 
 const apiRoutes = require('./routes/api.routes');
 const v1Routes = require('./routes/v1.routes');
+const authRoutes = require('./routes/auth.routes');
 const whatsappService = require('./services/whatsapp.service');
 const { corsOrigin, requireApiKey, timingSafeEqual } = require('./lib/http');
 
@@ -80,6 +81,7 @@ app.get('/health', (_req, res) => {
 // Setup API routes
 app.use('/api', apiRoutes);
 app.use('/api/v1', v1Routes);
+app.use('/api/auth', authRoutes);
 
 app.use((_req, res) => res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Route not found' }, meta: { requestId: res.locals.requestId } }));
 

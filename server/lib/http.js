@@ -19,7 +19,7 @@ function timingSafeEqual(left, right) {
 }
 
 function requireApiKey(req, res, next) {
-  if (req.path === '/provision' || req.path === '/v1/provision') return next();
+  if (req.path === '/provision' || req.path === '/v1/provision' || req.path.startsWith('/auth/')) return next();
 
   const apiKey = suppliedApiKey(req);
   if (!apiKey || apiKey.length < 32) {
