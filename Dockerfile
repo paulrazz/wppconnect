@@ -14,7 +14,9 @@ WORKDIR /app
 
 # Copy and install server only
 COPY server/package*.json ./server/
+RUN apt-get update && apt-get install -y python3 make g++ --no-install-recommends
 RUN npm install --prefix server
+RUN npm rebuild sqlite3 --prefix server --build-from-source
 
 COPY server/ ./server/
 
