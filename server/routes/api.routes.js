@@ -5,7 +5,9 @@ const whatsappService = require('../services/whatsapp.service');
 // Start the WhatsApp session
 router.post('/start-session', async (req, res) => {
   try {
-    void whatsappService.startSession().catch(() => {});
+    const { suppliedApiKey } = require('../lib/http');
+    const apiKey = suppliedApiKey(req);
+    void whatsappService.startSession(apiKey).catch(() => {});
     res.status(202).json({ message: 'Session start initiated', ...whatsappService.getStatus() });
   } catch (error) {
     res.status(500).json({ error: error.message });

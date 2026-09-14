@@ -42,19 +42,30 @@ const io = new Server(server, {
 });
 
 io.use((socket, next) => {
-  const key = process.env.WPPCONNECT_API_KEY;
-  if (!key || timingSafeEqual(socket.handshake.auth?.apiKey || socket.handshake.headers['x-api-key'], key)) return next();
-  next(new Error('Unauthorized'));
+  const key = socket.handshake.auth?.apiKey || socket.handshake.headers['x-api-key'];
+  if (!key || key.length < 32) return next(new Error('Unauthorized'));
+  socket.apiKey = key;
+  next();
 });
 
 whatsappService.setIo(io);
 
 io.on('connection', (socket) => {
-  console.log('A dashboard client connected:', socket.id);
-  // Send the current status upon connection
-  socket.emit('session_status', whatsappService.sessionStatus);
-  socket.emit('session_details', whatsappService.getStatus());
-  if (whatsappService.lastQrCode) socket.emit('qr_code', whatsappService.lastQrCode);
+  const apiKey = socket.apiKey;
+  console.log('A dashboard client connected:', socket.id, 'for session:', apiKey.substring(0, 8));
+  socket.join(`session_${apiKey}`);
+  
+  // Bring this user's session into memory (swaps out the active one if different)
+  whatsappService.ensureSessionActive(apiKey).catch(console.error);
+
+  // Send the current status if they are the currently active session
+  if (whatsappService.currentApiKey === apiKey) {
+    socket.emit('session_status', whatsappService.sessionStatus);
+    socket.emit('session_details', whatsappService.getStatus());
+    if (whatsappService.lastQrCode) socket.emit('qr_code', whatsappService.lastQrCode);
+  } else {
+    socket.emit('session_status', 'STARTING');
+  }
 
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
@@ -81,9 +92,6 @@ const PORT = process.env.PORT || 4005;
 
 server.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
-  whatsappService.startSession().catch((error) => {
-    console.error('Automatic session restore failed:', error.message);
-  });
 });
 
 let shuttingDown = false;

@@ -3,8 +3,15 @@ const path = require('path');
 const whatsapp = require('../services/whatsapp.service');
 const webhooks = require('../services/webhook.service');
 
+const crypto = require('crypto');
+
 const router = express.Router();
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data, meta: { requestId: res.locals.requestId } });
+
+router.post('/provision', (req, res) => {
+  const apiKey = crypto.randomBytes(32).toString('hex');
+  ok(res, { apiKey, message: 'Store this key securely. It cannot be recovered.' }, 201);
+});
 
 function destination(value) {
   const input = String(value || '').trim();

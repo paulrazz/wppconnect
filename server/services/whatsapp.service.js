@@ -49,13 +49,19 @@ function messagePreview(message) {
   if (text) return text;
   return type === 'chat' ? 'Message' : `[${type.replaceAll('_', ' ')}]`;
 }
+const crypto = require('crypto');
+
+function hashKey(key) {
+  return crypto.createHash('sha256').update(key || '').digest('hex').substring(0, 32);
+}
 
 class WhatsAppService {
   constructor() {
     this.client = null;
+    this.currentApiKey = null;
     this.sessionStatus = 'DISCONNECTED';
     this.sessionName = 'dashboard-session';
-    this.sessionPath = path.resolve(__dirname, '..', 'whatsapp-session-data');
+    this.sessionPath = null;
     this.io = null;
     this.startPromise = null;
     this.lastError = null;
@@ -74,8 +80,12 @@ class WhatsAppService {
     this.lastError = error ? (error.message || String(error)) : null;
     if (status !== 'QR_READY') this.lastQrCode = null;
     if (status === 'CONNECTED') this.connectedAt = new Date().toISOString();
-    this.io?.emit('session_status', status);
-    this.io?.emit('session_details', this.getStatus());
+    
+    if (this.currentApiKey) {
+      const room = `session_${this.currentApiKey}`;
+      this.io?.to(room).emit('session_status', status);
+      this.io?.to(room).emit('session_details', this.getStatus());
+    }
     void webhooks.emit('session.status', this.getStatus());
   }
 
@@ -83,23 +93,45 @@ class WhatsAppService {
     return { status: this.sessionStatus, ready: this.sessionStatus === 'CONNECTED' && Boolean(this.client), session: this.sessionName, connectedAt: this.connectedAt, lastError: this.lastError, passiveMode: this.passiveMode, readReceipts: 'disabled' };
   }
 
-  async startSession() {
-    // If we already have a client instance, the browser is running (whether connected or waiting for QR).
-    if (this.client) return this.client;
-    if (this.startPromise) return this.startPromise;
-    // Browser is already running and waiting for QR — don't launch a second instance
-    if (this.sessionStatus === 'QR_READY' || this.sessionStatus === 'STARTING') return;
+  async ensureSessionActive(apiKey) {
+    if (!apiKey) throw new Error('API Key is required to start a session');
+    
+    // If this specific session is already active or starting, return it
+    if (this.currentApiKey === apiKey && (this.client || this.startPromise)) {
+      if (this.sessionStatus === 'QR_READY' || this.sessionStatus === 'STARTING') return;
+      return this.startPromise || this.client;
+    }
+
+    // Otherwise, we must swap. Stop current session if any.
+    if (this.client || this.startPromise) {
+      console.log(`[Session Swap] Gracefully closing session for ${this.sessionName} to free RAM.`);
+      await this.stopSession();
+    }
+
+    // Now start the new one
+    this.currentApiKey = apiKey;
+    this.sessionName = hashKey(apiKey);
+    this.sessionPath = path.resolve(__dirname, '..', 'sessions', this.sessionName);
+    
     this.setStatus('STARTING');
     const generation = ++this.lifecycleGeneration;
     this.startPromise = this.createClient(generation);
     try { return await this.startPromise; } finally { this.startPromise = null; }
   }
 
+  async startSession(apiKey) {
+    return this.ensureSessionActive(apiKey || this.currentApiKey);
+  }
+
   async createClient(generation) {
     try {
       const client = await wppconnect.create({
         session: this.sessionName,
-        catchQR: (base64Qr) => { this.lastQrCode = base64Qr; this.setStatus('QR_READY'); this.io?.emit('qr_code', base64Qr); },
+        catchQR: (base64Qr) => { 
+          this.lastQrCode = base64Qr; 
+          this.setStatus('QR_READY'); 
+          if (this.currentApiKey) this.io?.to(`session_${this.currentApiKey}`).emit('qr_code', base64Qr); 
+        },
         statusFind: (status) => {
           console.log('WhatsApp auth status:', status);
           if (['isLogged', 'inChat', 'qrReadSuccess'].includes(status)) this.setStatus('CONNECTED');

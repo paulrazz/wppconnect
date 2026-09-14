@@ -19,12 +19,18 @@ function timingSafeEqual(left, right) {
 }
 
 function requireApiKey(req, res, next) {
-  const configuredKey = process.env.WPPCONNECT_API_KEY;
-  if (!configuredKey) return next();
-  if (!timingSafeEqual(suppliedApiKey(req), configuredKey)) {
+  if (req.path === '/provision' || req.path === '/v1/provision') return next();
+
+  const apiKey = suppliedApiKey(req);
+  if (!apiKey || apiKey.length < 32) {
     return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'A valid API key is required' }, meta: { requestId: res.locals.requestId } });
   }
-  next();
+
+  // Bring the user's session into memory (swapping out whoever is currently active)
+  const whatsappService = require('../services/whatsapp.service');
+  whatsappService.ensureSessionActive(apiKey)
+    .then(() => next())
+    .catch((err) => next(apiError(500, 'SESSION_ERROR', err.message)));
 }
 
 function allowedOrigins() {
