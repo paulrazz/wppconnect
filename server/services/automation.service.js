@@ -88,7 +88,7 @@ class AutomationService {
    * Evaluate an incoming message against stored rules.
    * Returns a promise that resolves when any triggered action has been performed.
    */
-  async handleIncomingMessage(message, whatsappService) {
+  async handleIncomingMessage(message, apiKey, whatsappService) {
     const text = (message.body || message.caption || message.content || '').toString();
     for (const rule of this.rules) {
       const matches = typeof rule.pattern === 'string' ? text.includes(rule.pattern) : rule.pattern.test(text);
@@ -98,24 +98,24 @@ class AutomationService {
       try {
         switch (type) {
           case 'reply':
-            await whatsappService.sendMessage(message.from, payload, { quotedMessageId: message.id._serialized });
+            await whatsappService.sendMessage(apiKey, message.from, payload, { quotedMessageId: message.id._serialized });
             break;
           case 'template':
             const tmpl = this.getTemplate(payload);
             if (tmpl) {
               const content = tmpl.content;
               if (tmpl.type === 'text') {
-                await whatsappService.sendMessage(message.from, content, { quotedMessageId: message.id._serialized });
+                await whatsappService.sendMessage(apiKey, message.from, content, { quotedMessageId: message.id._serialized });
               } else if (tmpl.type === 'list') {
                 // Simple list payload – expects { title, button, sections }
-                await whatsappService.sendList(message.from, content);
+                await whatsappService.sendList(apiKey, message.from, content);
               }
             }
             break;
           case 'order':
             if (typeof payload === 'function') {
               const orderPayload = await payload(message);
-              await whatsappService.sendMessage(message.from, orderPayload.text, { quotedMessageId: message.id._serialized });
+              await whatsappService.sendMessage(apiKey, message.from, orderPayload.text, { quotedMessageId: message.id._serialized });
             }
             break;
           default:

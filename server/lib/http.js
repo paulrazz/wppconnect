@@ -43,25 +43,11 @@ async function requireApiKey(req, res, next) {
     }
   }
 
-  // Only boot Chromium for endpoints that explicitly need it.
-  // Status checks and other read-only queries should NOT launch a browser.
-  const readOnlyPaths = ['/status', '/v1/session'];
-  if (readOnlyPaths.some(p => req.path === p || req.path.endsWith(p))) {
-    return next();
-  }
-
-  // For start-session, the route handler itself calls ensureSessionActive with the API key.
-  if (req.path === '/start-session') {
-    return next();
-  }
-
-  // For all other API calls, ensure the session is active (swap in if needed)
-  const whatsappService = require('../services/whatsapp.service');
-  if (!whatsappService.client || whatsappService.currentApiKey !== apiKey) {
-    // Session isn't active for this user — don't auto-boot, just pass through
-    // and let the route handler throw a 503 "not connected" if it needs a client
-    return next();
-  }
+  // Attach the validated key so route handlers resolve the correct tenant
+  // session. This middleware never boots Chromium — routes call
+  // ensureSessionActive explicitly, and read-only calls throw 503 if the
+  // tenant has no live client. Sessions are keyed per API key, never shared.
+  res.locals.apiKey = apiKey;
   next();
 }
 

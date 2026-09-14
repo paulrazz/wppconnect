@@ -6,12 +6,12 @@ const whatsappService = require('../services/whatsapp.service');
 router.post('/start-session', async (req, res) => {
   try {
     const { suppliedApiKey } = require('../lib/http');
-    const apiKey = suppliedApiKey(req);
+    const apiKey = res.locals.apiKey || suppliedApiKey(req);
     if (!apiKey) return res.status(401).json({ error: 'API key is required' });
     void whatsappService.ensureSessionActive(apiKey).catch((err) => {
       console.error('Session boot failed:', err.message);
     });
-    res.status(202).json({ message: 'Session start initiated', ...whatsappService.getStatus() });
+    res.status(202).json({ message: 'Session start initiated', ...whatsappService.getStatus(apiKey) });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -20,7 +20,8 @@ router.post('/start-session', async (req, res) => {
 // Stop the WhatsApp session (Disconnects browser but stays logged in)
 router.post('/stop-session', async (req, res) => {
   try {
-    await whatsappService.stopSession();
+    const apiKey = res.locals.apiKey;
+    await whatsappService.stopSession(apiKey);
     res.json({ message: 'Session stopped' });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -30,7 +31,7 @@ router.post('/stop-session', async (req, res) => {
 // Logout of WhatsApp session (Unlinks device entirely)
 router.post('/logout-session', async (req, res) => {
   try {
-    await whatsappService.logoutSession();
+    await whatsappService.logoutSession(res.locals.apiKey);
     res.json({ message: 'Logged out successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -40,7 +41,7 @@ router.post('/logout-session', async (req, res) => {
 // Reset the WhatsApp session
 router.post('/reset-session', async (req, res) => {
   try {
-    await whatsappService.resetSession();
+    await whatsappService.resetSession(res.locals.apiKey);
     res.json({ message: 'Session reset' });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -49,7 +50,7 @@ router.post('/reset-session', async (req, res) => {
 
 // Get session status
 router.get('/status', (req, res) => {
-  res.json(whatsappService.getStatus());
+  res.json(whatsappService.getStatus(res.locals.apiKey));
 });
 
 // Send a message (optionally as a quote/reply to another message)
@@ -72,7 +73,7 @@ router.post('/send-message', async (req, res) => {
     const options = {};
     const quoteId = quotedMsg?.id?._serialized || quotedMsg?.id?.id || quotedMsg?.id || quotedMsg;
     if (quoteId) options.quotedMsg = quoteId;
-    const response = await whatsappService.sendMessage(formattedTo, text.trim(), options);
+    const response = await whatsappService.sendMessage(res.locals.apiKey, formattedTo, text.trim(), options);
     console.log('Message sent successfully:', response);
     res.json(response);
   } catch (error) {
@@ -89,7 +90,7 @@ router.post('/send-reaction', async (req, res) => {
     return res.status(400).json({ error: 'messageId and reaction are required' });
   }
   try {
-    const response = await whatsappService.sendReaction(id, reaction);
+    const response = await whatsappService.sendReaction(res.locals.apiKey, id, reaction);
     res.json(response);
   } catch (error) {
     console.error('Send reaction failed in API route:', error);
@@ -101,7 +102,7 @@ router.post('/send-file', async (req, res) => {
   const { to, dataUrl, filename, caption } = req.body;
   if (!to || !dataUrl || !filename) return res.status(400).json({ error: 'Recipient, file, and filename are required' });
   try {
-    const response = await whatsappService.sendFile(to, dataUrl, filename, caption);
+    const response = await whatsappService.sendFile(res.locals.apiKey, to, dataUrl, filename, caption);
     res.json(response);
   } catch (error) { res.status(error.statusCode || 500).json({ error: error.message }); }
 });
@@ -110,21 +111,21 @@ router.post('/send-sticker', async (req, res) => {
   const { to, dataUrl } = req.body;
   if (!to || !dataUrl) return res.status(400).json({ error: 'Recipient and image are required' });
   try {
-    const response = await whatsappService.sendSticker(to, dataUrl);
+    const response = await whatsappService.sendSticker(res.locals.apiKey, to, dataUrl);
     res.json(response);
   } catch (error) { res.status(error.statusCode || 500).json({ error: error.message }); }
 });
 
 router.get('/media/:messageId', async (req, res) => {
   try {
-    res.json(await whatsappService.downloadMedia(req.params.messageId));
+    res.json(await whatsappService.downloadMedia(res.locals.apiKey, req.params.messageId));
   } catch (error) { res.status(error.statusCode || 500).json({ error: error.message }); }
 });
 
 // Get all chats
 router.get('/chats', async (req, res) => {
   try {
-    const page = await whatsappService.getChats(req.query);
+    const page = await whatsappService.getChats(res.locals.apiKey, req.query);
     res.json({ chats: page.items, pagination: { total: page.total, offset: page.offset, limit: page.limit, hasMore: page.hasMore } });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -135,7 +136,7 @@ router.get('/chats', async (req, res) => {
 router.get('/messages/:chatId', async (req, res) => {
   try {
     res.setHeader('x-message-read-receipts', 'disabled');
-    res.json(await whatsappService.getMessages(req.params.chatId, req.query.count));
+    res.json(await whatsappService.getMessages(res.locals.apiKey, req.params.chatId, req.query.count));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -144,7 +145,7 @@ router.get('/messages/:chatId', async (req, res) => {
 router.post('/messages/:chatId/sync', async (req, res) => {
   try {
     res.setHeader('x-message-read-receipts', 'disabled');
-    res.json(await whatsappService.loadEarlierMessages(req.params.chatId, req.body?.before, req.body?.count));
+    res.json(await whatsappService.loadEarlierMessages(res.locals.apiKey, req.params.chatId, req.body?.before, req.body?.count));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -153,7 +154,7 @@ router.post('/messages/:chatId/sync', async (req, res) => {
 router.get('/stories', async (req, res) => {
   try {
     res.setHeader('x-status-read-receipts', 'disabled');
-    const stories = await whatsappService.getStatuses();
+    const stories = await whatsappService.getStatuses(res.locals.apiKey);
     res.json(stories);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -163,7 +164,7 @@ router.get('/stories', async (req, res) => {
 // Get all contacts
 router.get('/contacts', async (req, res) => {
   try {
-    const contacts = await whatsappService.getContacts();
+    const contacts = await whatsappService.getContacts(res.locals.apiKey);
     res.json({ contacts });
   } catch (error) {
     res.status(500).json({ error: error.message });

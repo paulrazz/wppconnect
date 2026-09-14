@@ -24,7 +24,7 @@ router.get('/users', async (req, res) => {
       // In whatsapp.service.js: path.resolve(__dirname, '..', 'sessions', this.sessionName) => server/sessions/<hash>
       const sessionPath = path.resolve(__dirname, '..', 'data', 'sessions', hash);
       const hasProfile = fs.existsSync(sessionPath);
-      const isCurrentlyActive = whatsappService.currentApiKey === u.api_key;
+      const isCurrentlyActive = whatsappService.isActiveFor(u.api_key);
       return { ...u, sessionHash: hash, hasProfile, isCurrentlyActive };
     });
     res.json({ users: data });
@@ -39,9 +39,9 @@ router.delete('/users/:id', async (req, res) => {
     if (!user) return res.status(404).json({ error: 'Not found' });
     
     // Check if active in RAM
-    if (whatsappService.currentApiKey === user.api_key) {
+    if (whatsappService.isActiveFor(user.api_key)) {
       console.log('[Admin] Force stopping active session before deletion');
-      await whatsappService.stopSession();
+      await whatsappService.stopSession(user.api_key);
     }
     
     const hash = crypto.createHash('sha256').update(user.api_key).digest('hex').substring(0, 32);

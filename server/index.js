@@ -61,14 +61,14 @@ io.on('connection', (socket) => {
   // This saves massive amounts of RAM on Railway.
   // The user must click "Connect Device" to explicitly start the engine.
 
-  // Report the real engine state, mirroring GET /api/status. This server runs a
-  // single global session, so any authenticated dashboard sees the same truth
-  // the REST endpoint reports - otherwise a reload could read CONNECTED from
-  // REST while the socket handshake force-reported DISCONNECTED for a client
-  // whose stored key is not the key the current session was started with.
-  socket.emit('session_status', whatsappService.sessionStatus);
-  socket.emit('session_details', whatsappService.getStatus());
-  if (whatsappService.lastQrCode) socket.emit('qr_code', whatsappService.lastQrCode);
+  // Report the real engine state, mirroring GET /api/status. State is now
+  // keyed per tenant (session_<apiKey> room), so each dashboard sees exactly
+  // what its own key's session reports - REST and the socket always agree.
+  const detail = whatsappService.getStatus(apiKey);
+  socket.emit('session_status', detail.status);
+  socket.emit('session_details', detail);
+  const qr = whatsappService.getQr(apiKey);
+  if (qr) socket.emit('qr_code', qr);
 
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
@@ -76,7 +76,7 @@ io.on('connection', (socket) => {
 });
 
 app.get('/health', (_req, res) => {
-  const status = whatsappService.getStatus();
+  const status = whatsappService.overview();
   res.status(status.status === 'ERROR' ? 503 : 200).json({ ok: status.status !== 'ERROR', service: 'wppconnect-dev-console', uptimeSeconds: Math.round(process.uptime()), whatsapp: status });
 });
 
@@ -107,7 +107,7 @@ async function shutdown(signal) {
   server.close();
   const forceExit = setTimeout(() => process.exit(1), 15000);
   forceExit.unref();
-  try { await whatsappService.stopSession(); } catch (error) { console.error('Session shutdown failed:', error.message); }
+  try { await whatsappService.stopAll(); } catch (error) { console.error('Session shutdown failed:', error.message); }
   clearTimeout(forceExit);
   process.exit(0);
 }

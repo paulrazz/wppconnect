@@ -31,23 +31,23 @@ router.get('/capabilities', (_req, res) => ok(res, {
   documentation: '/api/v1/openapi.yaml',
 }));
 
-router.get('/session', (_req, res) => ok(res, whatsapp.getStatus()));
-router.post('/session/start', (_req, res) => { void whatsapp.startSession().catch(() => {}); ok(res, whatsapp.getStatus(), 202); });
-router.post('/session/stop', async (_req, res) => { await whatsapp.stopSession(); ok(res, whatsapp.getStatus()); });
-router.delete('/session', async (_req, res) => { await whatsapp.logoutSession(); ok(res, whatsapp.getStatus()); });
-router.get('/chats', async (req, res) => ok(res, await whatsapp.getChats(req.query)));
+router.get('/session', (req, res) => ok(res, whatsapp.getStatus(res.locals.apiKey)));
+router.post('/session/start', (req, res) => { void whatsapp.startSession(res.locals.apiKey).catch(() => {}); ok(res, whatsapp.getStatus(res.locals.apiKey), 202); });
+router.post('/session/stop', async (req, res) => { await whatsapp.stopSession(res.locals.apiKey); ok(res, whatsapp.getStatus(res.locals.apiKey)); });
+router.delete('/session', async (req, res) => { await whatsapp.logoutSession(res.locals.apiKey); ok(res, whatsapp.getStatus(res.locals.apiKey)); });
+router.get('/chats', async (req, res) => ok(res, await whatsapp.getChats(res.locals.apiKey, req.query)));
 router.get('/chats/:chatId/messages', async (req, res) => {
   res.setHeader('x-message-read-receipts', 'disabled');
-  ok(res, await whatsapp.getMessages(req.params.chatId, req.query.limit));
+  ok(res, await whatsapp.getMessages(res.locals.apiKey, req.params.chatId, req.query.limit));
 });
-router.get('/contacts', async (_req, res) => ok(res, await whatsapp.getContacts()));
-router.get('/contacts/:contactId/identity', async (req, res) => ok(res, await whatsapp.inspectIdentity(req.params.contactId)));
-router.get('/groups', async (_req, res) => ok(res, await whatsapp.getGroups()));
-router.get('/statuses', async (_req, res) => {
+router.get('/contacts', async (req, res) => ok(res, await whatsapp.getContacts(res.locals.apiKey)));
+router.get('/contacts/:contactId/identity', async (req, res) => ok(res, await whatsapp.inspectIdentity(res.locals.apiKey, req.params.contactId)));
+router.get('/groups', async (req, res) => ok(res, await whatsapp.getGroups(res.locals.apiKey)));
+router.get('/statuses', async (req, res) => {
   res.setHeader('x-status-read-receipts', 'disabled');
-  ok(res, { items: await whatsapp.getStatuses(), privacyMode: 'no-read-receipts' });
+  ok(res, { items: await whatsapp.getStatuses(res.locals.apiKey), privacyMode: 'no-read-receipts' });
 });
-router.get('/media/:messageId', async (req, res) => ok(res, await whatsapp.downloadMedia(req.params.messageId)));
+router.get('/media/:messageId', async (req, res) => ok(res, await whatsapp.downloadMedia(res.locals.apiKey, req.params.messageId)));
 router.get('/events', (req, res) => ok(res, whatsapp.getEvents(req.query)));
 router.get('/deleted-messages', (req, res) => ok(res, whatsapp.getDeletedMessages(req.query)));
 router.get('/deletions', (req, res) => ok(res, whatsapp.getDeletions(req.query)));
@@ -55,7 +55,7 @@ router.get('/deletions', (req, res) => ok(res, whatsapp.getDeletions(req.query))
 router.post('/messages/text', async (req, res) => {
   const text = String(req.body.text || '').trim();
   if (!text) { const error = new Error('Message text is required'); error.statusCode = 400; throw error; }
-  ok(res, await whatsapp.sendMessage(destination(req.body.to), text), 201);
+  ok(res, await whatsapp.sendMessage(res.locals.apiKey, destination(req.body.to), text), 201);
 });
 router.post('/messages/buttons', async (req, res) => {
   const text = String(req.body.text || '').trim();
@@ -63,34 +63,34 @@ router.post('/messages/buttons', async (req, res) => {
   if (!text || !Array.isArray(buttons) || buttons.length < 1 || buttons.length > 3) { const error = new Error('Message text and between 1 and 3 buttons are required'); error.statusCode = 400; throw error; }
   const kinds = new Set(buttons.map(button => button.url ? 'url' : button.phoneNumber ? 'phone' : 'reply'));
   if (kinds.has('reply') && kinds.size > 1) { const error = new Error('WhatsApp cannot mix reply buttons with URL or phone buttons. Choose one button mode.'); error.statusCode = 400; throw error; }
-  ok(res, await whatsapp.sendMessage(destination(req.body.to), text, { useTemplateButtons: true, buttons: req.body.buttons, title: req.body.title, footer: req.body.footer }), 201);
+  ok(res, await whatsapp.sendMessage(res.locals.apiKey, destination(req.body.to), text, { useTemplateButtons: true, buttons: req.body.buttons, title: req.body.title, footer: req.body.footer }), 201);
 });
 router.post('/messages/list', async (req, res) => {
   if (!req.body.options?.sections?.length) { const error = new Error('options.sections is required'); error.statusCode = 400; throw error; }
-  ok(res, await whatsapp.sendList(destination(req.body.to), req.body.options), 201);
+  ok(res, await whatsapp.sendList(res.locals.apiKey, destination(req.body.to), req.body.options), 201);
 });
 router.post('/messages/poll', async (req, res) => {
   if (!req.body.name || !Array.isArray(req.body.choices) || req.body.choices.length < 2) { const error = new Error('name and at least two choices are required'); error.statusCode = 400; throw error; }
-  ok(res, await whatsapp.sendPoll(destination(req.body.to), req.body.name, req.body.choices, req.body.options), 201);
+  ok(res, await whatsapp.sendPoll(res.locals.apiKey, destination(req.body.to), req.body.name, req.body.choices, req.body.options), 201);
 });
 router.post('/messages/reaction', async (req, res) => {
   if (!req.body.messageId || !('reaction' in req.body)) { const error = new Error('messageId and reaction are required'); error.statusCode = 400; throw error; }
-  ok(res, await whatsapp.sendReaction(req.body.messageId, req.body.reaction), 201);
+  ok(res, await whatsapp.sendReaction(res.locals.apiKey, req.body.messageId, req.body.reaction), 201);
 });
 router.post('/messages/file', async (req, res) => {
   if (!req.body.dataUrl || !req.body.filename) { const error = new Error('dataUrl and filename are required'); error.statusCode = 400; throw error; }
-  ok(res, await whatsapp.sendFile(destination(req.body.to), req.body.dataUrl, req.body.filename, req.body.caption), 201);
+  ok(res, await whatsapp.sendFile(res.locals.apiKey, destination(req.body.to), req.body.dataUrl, req.body.filename, req.body.caption), 201);
 });
 router.post('/messages/sticker', async (req, res) => {
   if (!req.body.dataUrl) { const error = new Error('dataUrl is required'); error.statusCode = 400; throw error; }
-  ok(res, await whatsapp.sendSticker(destination(req.body.to), req.body.dataUrl), 201);
+  ok(res, await whatsapp.sendSticker(res.locals.apiKey, destination(req.body.to), req.body.dataUrl), 201);
 });
 router.post('/messages/location', async (req, res) => {
   const { latitude, longitude, title } = req.body;
   if (!Number.isFinite(Number(latitude)) || !Number.isFinite(Number(longitude))) { const error = new Error('Valid latitude and longitude are required'); error.statusCode = 400; throw error; }
-  ok(res, await whatsapp.sendLocation(destination(req.body.to), latitude, longitude, title), 201);
+  ok(res, await whatsapp.sendLocation(res.locals.apiKey, destination(req.body.to), latitude, longitude, title), 201);
 });
-router.post('/messages/contact', async (req, res) => ok(res, await whatsapp.sendContact(destination(req.body.to), destination(req.body.contact), req.body.name), 201));
+router.post('/messages/contact', async (req, res) => ok(res, await whatsapp.sendContact(res.locals.apiKey, destination(req.body.to), destination(req.body.contact), req.body.name), 201));
 
 router.get('/webhooks', (_req, res) => ok(res, webhooks.list()));
 router.post('/webhooks', async (req, res) => ok(res, await webhooks.create(req.body), 201));

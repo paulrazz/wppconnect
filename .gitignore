@@ -7,8 +7,6 @@ client/dist/
 # Authentication state and local runtime data must never be committed.
 server/tokens/
 server/whatsapp-session-data/
-server/data/*.json
-server/data/*.jsonl
-server/data/media-cache/
+server/data/
 *.log
 .DS_Store
