@@ -7,7 +7,10 @@ router.post('/start-session', async (req, res) => {
   try {
     const { suppliedApiKey } = require('../lib/http');
     const apiKey = suppliedApiKey(req);
-    void whatsappService.startSession(apiKey).catch(() => {});
+    if (!apiKey) return res.status(401).json({ error: 'API key is required' });
+    void whatsappService.ensureSessionActive(apiKey).catch((err) => {
+      console.error('Session boot failed:', err.message);
+    });
     res.status(202).json({ message: 'Session start initiated', ...whatsappService.getStatus() });
   } catch (error) {
     res.status(500).json({ error: error.message });

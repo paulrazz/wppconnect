@@ -127,6 +127,7 @@ class WhatsAppService {
     try {
       const client = await wppconnect.create({
         session: this.sessionName,
+        folderNameToken: path.resolve(__dirname, '..', 'data', 'sessions'),
         catchQR: (base64Qr) => { 
           this.lastQrCode = base64Qr; 
           this.setStatus('QR_READY'); 
