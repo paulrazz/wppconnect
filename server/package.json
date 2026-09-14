@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node --max-old-space-size=450 index.js",
+    "start": "node index.js",
     "dev": "node --watch index.js",
     "check": "node --check index.js && node --check routes/api.routes.js && node --check routes/v1.routes.js && node --check services/whatsapp.service.js && node --check services/webhook.service.js && node --check services/event-store.service.js && node --test test/*.test.js",
     "test": "node --test test/*.test.js"

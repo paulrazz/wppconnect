@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 
 // Ensure the data directory exists so SQLite doesn't fail
-const dataDir = path.resolve(__dirname, '..', 'whatsapp-session-data');
+const dataDir = path.resolve(__dirname, '..', 'data');
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
