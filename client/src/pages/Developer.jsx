@@ -74,7 +74,7 @@ export default function Developer() {
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-[#262931] bg-[#1a1d24]">
           <div className="flex items-center">
-            <span className={\`text-xs font-bold px-2 py-1 rounded mr-3 \${payload ? 'bg-indigo-500/20 text-indigo-400' : 'bg-emerald-500/20 text-emerald-400'}\`}>
+            <span className={`text-xs font-bold px-2 py-1 rounded mr-3 ${payload ? 'bg-indigo-500/20 text-indigo-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
               {payload ? 'POST' : 'GET'}
             </span>
             <div className="text-sm font-medium text-slate-300">{title}</div>
@@ -96,7 +96,7 @@ export default function Developer() {
             <button
               key={lang}
               onClick={() => setActiveLang(lang)}
-              className={\`px-4 py-2 text-xs font-medium uppercase tracking-wider transition-colors \${activeLang === lang ? 'text-indigo-400 border-b-2 border-indigo-500 bg-[#16191f]' : 'text-slate-500 hover:text-slate-300'}\`}
+              className={`px-4 py-2 text-xs font-medium uppercase tracking-wider transition-colors ${activeLang === lang ? 'text-indigo-400 border-b-2 border-indigo-500 bg-[#16191f]' : 'text-slate-500 hover:text-slate-300'}`}
             >
               {lang === 'javascript' ? 'Node.js' : lang}
             </button>
@@ -162,7 +162,7 @@ export default function Developer() {
               <Activity className="w-4 h-4 mr-2" />
               Last Test Response
             </h3>
-            <div className={\`rounded-xl overflow-hidden border \${testResult.success ? 'border-emerald-500/30' : 'border-rose-500/30'}\`}>
+            <div className={`rounded-xl overflow-hidden border ${testResult.success ? 'border-emerald-500/30' : 'border-rose-500/30'}`}>
               <SyntaxHighlighter
                 language="json"
                 style={vscDarkPlus}
@@ -209,7 +209,7 @@ export default function Developer() {
               style={vscDarkPlus}
               customStyle={{ margin: 0, padding: '1rem', background: '#111317', fontSize: '0.875rem' }}
             >
-              {\`// Example Webhook Payload
+              {`// Example Webhook Payload
 {
   "event": "message",
   "data": {
@@ -218,7 +218,7 @@ export default function Developer() {
     "timestamp": 1694678123,
     "isGroupMsg": false
   }
-}\`}
+}`}
             </SyntaxHighlighter>
           </div>
         </div>

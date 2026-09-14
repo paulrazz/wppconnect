@@ -79,8 +79,8 @@ export default function Login() {
         <div className="bg-[#16191f] shadow sm:rounded-xl border border-[#262931] overflow-hidden">
           
           <div className="flex border-b border-[#262931]">
-            <button onClick={() => { setActiveTab('login'); setError(''); setSuccessMsg(''); }} className={\`flex-1 py-4 text-sm font-medium transition-colors \${activeTab === 'login' ? 'text-indigo-400 bg-[#1c2028] border-b-2 border-indigo-500' : 'text-slate-500 hover:text-slate-300'}\`}>Log In</button>
-            <button onClick={() => { setActiveTab('signup'); setError(''); setSuccessMsg(''); }} className={\`flex-1 py-4 text-sm font-medium transition-colors \${activeTab === 'signup' ? 'text-indigo-400 bg-[#1c2028] border-b-2 border-indigo-500' : 'text-slate-500 hover:text-slate-300'}\`}>Sign Up</button>
+            <button onClick={() => { setActiveTab('login'); setError(''); setSuccessMsg(''); }} className={`flex-1 py-4 text-sm font-medium transition-colors ${activeTab === 'login' ? 'text-indigo-400 bg-[#1c2028] border-b-2 border-indigo-500' : 'text-slate-500 hover:text-slate-300'}`}>Log In</button>
+            <button onClick={() => { setActiveTab('signup'); setError(''); setSuccessMsg(''); }} className={`flex-1 py-4 text-sm font-medium transition-colors ${activeTab === 'signup' ? 'text-indigo-400 bg-[#1c2028] border-b-2 border-indigo-500' : 'text-slate-500 hover:text-slate-300'}`}>Sign Up</button>
           </div>
 
           <div className="p-6 sm:px-10 py-8">
