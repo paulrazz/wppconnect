@@ -58,13 +58,16 @@ export default function Dashboard() {
   const handleStartSession = async () => {
     try {
       setSessionStatus('STARTING');
-      await axios.post(`${API_URL}/start-session`);
-    } catch (e) { console.error(e); }
+      await axios.post(`${API_URL}/start-session`, {}, { headers: { 'x-api-key': apiKey } });
+    } catch (e) {
+      console.error(e);
+      setSessionStatus('DISCONNECTED');
+    }
   };
 
   const handleStopSession = async () => {
     try {
-      await axios.post(`${API_URL}/stop-session`);
+      await axios.post(`${API_URL}/stop-session`, {}, { headers: { 'x-api-key': apiKey } });
       setSessionStatus('DISCONNECTED');
     } catch (e) { console.error(e); }
   };
