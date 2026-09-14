@@ -2,9 +2,9 @@ import { useState } from 'react';
 import { Send, LoaderCircle, X } from 'lucide-react';
 import { useTheme } from '../ThemeContext';
 import axios from 'axios';
+import { safeMessageText } from '../messageText';
 
 const msgId = (m) => m?.id?._serialized || m?.id?.id || (typeof m?.id === 'string' ? m.id : null);
-const previewText = (m) => m?.caption || m?.body || m?.text || m?.type || 'Message';
 
 export default function ChatInputForm({ activeChatId, apiKey, onMessageSent, API_URL, replyTo = null, onClearReply }) {
   const { theme } = useTheme();
@@ -17,7 +17,7 @@ export default function ChatInputForm({ activeChatId, apiKey, onMessageSent, API
     
     setSending(true);
     try {
-      const payload = { to: activeChatId.split('@')[0], text: replyText };
+      const payload = { to: activeChatId, text: replyText };
       if (replyTo && msgId(replyTo)) payload.quotedMsg = msgId(replyTo);
       const res = await axios.post(`${API_URL}/send-message`, payload,
         { headers: { 'x-api-key': apiKey } }
@@ -49,7 +49,7 @@ export default function ChatInputForm({ activeChatId, apiKey, onMessageSent, API
             <p className={`font-semibold mb-0.5 ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-600'}`}>
               Replying to {replyTo.fromMe ? 'yourself' : (replyTo.senderName || replyTo.notifyName || activeChatId.split('@')[0])}
             </p>
-            <p className="truncate italic">{previewText(replyTo)}</p>
+            <p className="truncate italic">{safeMessageText(replyTo) || 'Media'}</p>
           </div>
           <button onClick={onClearReply} className={`p-1.5 rounded-lg ${theme === 'dark' ? 'text-slate-500 hover:text-white' : 'text-slate-400 hover:text-slate-700'}`}>
             <X className="w-4 h-4" />

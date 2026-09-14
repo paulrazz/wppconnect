@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from '
 import axios from 'axios';
 import { getApiKey } from '../auth';
 import liveStream from '../liveStream';
+import { safeMessageText, messagePreview } from '../messageText';
 import { useTheme } from '../ThemeContext';
 import { UserCircle, Search, MessageSquare, LoaderCircle, Lock, Reply, SmilePlus, Download, FileText, MapPin } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -28,7 +29,8 @@ const dedupeKey = (m) => (msgId(m) || '').replace(/_out$/, '');
 const MEDIA_TYPES = ['image', 'video', 'gif', 'audio', 'ptt', 'sticker', 'document'];
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '😢', '🙏', '🎉'];
 
-const safeText = (message) => message?.caption || message?.body || message?.text || message?.content || '';
+// The canonical (non "_out") id - matches what WhatsApp/our API emit reactions under.
+const canonicalId = (m) => (msgId(m) || '').replace(/_out$/, '');
 
 // Lazily fetches/downloads a message's media payload from the API (cached per message).
 function MediaContent({ message, apiKey, theme }) {
@@ -87,13 +89,13 @@ function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReac
   const quote = (() => {
     const q = message.quotedMsgObj || message.quotedMsg || (message.quotedMsgObj?.value);
     if (!q) return null;
-    const text = safeText(q);
+    const text = safeMessageText(q);
     if (!text && !q.filename) return null;
     const who = q.fromMe ? 'You' : (q.senderName || q.notifyName || q.author || q.pushname || (typeof q.from === 'string' ? q.from.split('@')[0] : 'Contact'));
     return { who, text, hasMedia: MEDIA_TYPES.includes(String(q.type || '').toLowerCase()) };
   })();
 
-  const text = safeText(message);
+  const text = safeMessageText(message);
 
   const location = message.location || {};
   const lat = message.lat ?? location.latitude ?? location.lat;
@@ -277,7 +279,7 @@ export default function LiveInbox() {
   const sendReaction = useCallback(async (message, emoji) => {
     try {
       await axios.post(`${API_URL}/send-reaction`,
-        { messageId: msgId(message), reaction: emoji },
+        { messageId: canonicalId(message), reaction: emoji },
         { headers: { 'x-api-key': apiKey } });
     } catch (err) {
       console.error("Failed to send reaction", err);
@@ -370,7 +372,7 @@ export default function LiveInbox() {
           ) : (
             sidebar.map(chat => {
               const lastMsg = chat.lastMessage;
-              const preview = lastMsg?.previewText || lastMsg?.body || '';
+              const preview = lastMsg?.previewText || messagePreview(lastMsg) || '';
               const isActive = activeChatId === chat.id;
               const hasLive = Boolean(liveChats[chat.id]?.messages?.length);
 
@@ -451,7 +453,7 @@ export default function LiveInbox() {
                     message={msg}
                     theme={theme}
                     apiKey={apiKey}
-                    reactions={liveReactions[msgId(msg)] || []}
+                    reactions={liveReactions[canonicalId(msg)] || []}
                     onReply={(m) => setReplyTo(m)}
                     onReact={sendReaction}
                   />

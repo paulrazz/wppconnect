@@ -395,7 +395,19 @@ class WhatsAppService {
       void webhooks.emit('message.edited', edit);
     });
     client.onReactionMessage((data) => {
-      const reaction = eventStore.append('message.reaction', data);
+      const probe = data.msgId || data.messageId || data.id;
+      const msgIdStr = eventStore.idOf(probe);
+      const senderRaw = data.sender?.id || data.sender?.user || data.sender?.author || data.author || data.from;
+      const sender = typeof senderRaw === 'string' ? senderRaw
+        : eventStore.idOf(senderRaw) || (senderRaw?.user || '');
+      const reaction = eventStore.append('message.reaction', {
+        msgId: msgIdStr,
+        reactionText: data.reactionText || '',
+        orphan: Boolean(data.orphan),
+        read: data.read,
+        timestamp: data.timestamp || data.t || Date.now(),
+        sender,
+      });
       this.io?.to(`session_${session.apiKey}`).emit('message_reaction', reaction);
       void webhooks.emit('message.reaction', reaction);
     });

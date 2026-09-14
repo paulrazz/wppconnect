@@ -33,13 +33,25 @@ function createLiveStream() {
     listeners.forEach(fn => { try { fn(); } catch (_) {} });
   };
 
-  const pushMessage = (message, targetId) => {
+  // Reactions, media lookups and dedupe all assume a canonical (non "_out")
+// message id. Strip the "_out" suffix from any copy we store so self-sent
+// bubbles behave exactly like peer messages.
+const normalizeOut = (m) => {
+  const serialized = msgId(m);
+  if (!serialized || !serialized.endsWith('_out')) return m;
+  const canonical = serialized.replace(/_out$/, '');
+  if (m.id && typeof m.id === 'object') return { ...m, id: { ...m.id, id: canonical, _serialized: canonical } };
+  if (typeof m.id === 'string') return { ...m, id: canonical };
+  return m;
+};
+
+const pushMessage = (message, targetId) => {
     if (!targetId) return false;
     if (!chats[targetId]) chats[targetId] = { messages: [] };
     const list = chats[targetId].messages;
     const key = dedupeKey(message);
     if (key && list.some(m => dedupeKey(m) === key)) return false;
-    list.push(message);
+    list.push(normalizeOut(message));
     return true;
   };
 
@@ -59,9 +71,15 @@ function createLiveStream() {
     });
 
     socket.on('message_reaction', (data) => {
-      const targetId = data.msgId?._serialized || data.msgId?.id || data.msgId;
-      if (!targetId) return;
-      const sender = typeof data.sender === 'string' ? data.sender : (data.sender?._serialized || String(data.sender));
+      const rawTarget = data.msgId?._serialized || data.msgId?.id || data.msgId;
+      if (!rawTarget) return;
+      // Reactions are always keyed by the canonical parent message key, while
+      // self-sent messages may be stored with an "_out" suffix. Normalize both
+      // to the same key so the lookup always matches.
+      const targetId = String(rawTarget).replace(/_out$/, '');
+      const senderRaw = data.sender?.id || data.sender?.user || data.sender;
+      const sender = typeof senderRaw === 'string' ? senderRaw
+        : (senderRaw?._serialized || senderRaw?.user || (typeof senderRaw?.id === 'string' ? senderRaw.id : ''));
       const list = (reactions[targetId] || []).filter(r => (r.senderId || r.sender) !== sender);
       if (!data.orphan && data.reactionText) {
         list.push({ emoji: data.reactionText, senderId: sender });
