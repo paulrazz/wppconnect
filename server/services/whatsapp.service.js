@@ -82,7 +82,8 @@ class WhatsAppService {
   }
 
   async startSession() {
-    if (this.client && this.sessionStatus === 'CONNECTED') return this.client;
+    // If we already have a client instance, the browser is running (whether connected or waiting for QR).
+    if (this.client) return this.client;
     if (this.startPromise) return this.startPromise;
     // Browser is already running and waiting for QR — don't launch a second instance
     if (this.sessionStatus === 'QR_READY' || this.sessionStatus === 'STARTING') return;
