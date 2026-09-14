@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { setApiKey } from '../auth';
+import liveStream from '../liveStream';
 import { MessageSquare, Phone, Lock, AlertCircle, ArrowRight, Server, ShieldCheck, KeyRound } from 'lucide-react';
 
 const SERVER_URL = (import.meta.env.VITE_WPPCONNECT_URL || '').replace(/\/$/, '');
@@ -23,6 +24,7 @@ export default function Login() {
     try {
       const res = await axios.post(`${API_URL}/auth/login`, { phone, password });
       await setApiKey(res.data.data.apiKey);
+      liveStream.connect(res.data.data.apiKey);
       navigate('/');
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to connect to server.');
@@ -36,6 +38,7 @@ export default function Login() {
     try {
       const res = await axios.post(`${API_URL}/auth/signup`, { phone, password });
       await setApiKey(res.data.data.apiKey);
+      liveStream.connect(res.data.data.apiKey);
       setSuccessMsg(`ACCOUNT CREATED! Please save this Recovery Code to reset your password if you forget it: ${res.data.data.recoveryCode}`);
       // Don't navigate immediately so they can see the code.
       setLoading(false);

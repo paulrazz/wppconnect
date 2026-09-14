@@ -17,7 +17,7 @@ export default function ChatInputForm({ activeChatId, apiKey, onMessageSent, API
     
     setSending(true);
     try {
-      const payload = { to: activeChatId.replace('@c.us', ''), text: replyText };
+      const payload = { to: activeChatId.split('@')[0], text: replyText };
       if (replyTo && msgId(replyTo)) payload.quotedMsg = msgId(replyTo);
       const res = await axios.post(`${API_URL}/send-message`, payload,
         { headers: { 'x-api-key': apiKey } }

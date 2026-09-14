@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from 'react';
 import axios from 'axios';
-import { io } from 'socket.io-client';
 import { getApiKey } from '../auth';
+import liveStream from '../liveStream';
 import { useTheme } from '../ThemeContext';
 import { UserCircle, Search, MessageSquare, LoaderCircle, Lock, Reply, SmilePlus, Download, FileText, MapPin } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -11,6 +11,19 @@ const SERVER_URL = (import.meta.env.VITE_WPPCONNECT_URL || '').replace(/\/$/, ''
 const API_URL = `${SERVER_URL}/api`;
 
 const msgId = (m) => m?.id?._serialized || m?.id?.id || (typeof m?.id === 'string' ? m.id : null);
+
+// The chat a message belongs to, mirroring the backend emit: prefer the
+// message's own chatId, then fall back to the peer (to for outgoing, from
+// for incoming).
+const chatIdOf = (m) => m?.chatId?._serialized || m?.chatId || (m?.fromMe ? m?.to : m?.from);
+
+// WhatsApp self-sends echo your own wid: from === to.
+const isSelfMessage = (m) => String(m?.fromMe) === 'true' && String(m?.to) === String(m?.from);
+
+// Same outgoing message can be reported twice - once as the optimistic send
+// result (id gained an "_out" suffix), once as the socket echo. Normalize for
+// dedupe so we never render twin bubbles.
+const dedupeKey = (m) => (msgId(m) || '').replace(/_out$/, '');
 
 const MEDIA_TYPES = ['image', 'video', 'gif', 'audio', 'ptt', 'sticker', 'document'];
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '😢', '🙏', '🎉'];
@@ -178,63 +191,37 @@ export default function LiveInbox() {
   const [sessionStatus, setSessionStatus] = useState('LOADING');
   const [contacts, setContacts] = useState({});
   const [apiChats, setApiChats] = useState([]);
-  const [chats, setChats] = useState({}); // { chatId: { messages: [] } } - live messages only
-  const [reactions, setReactions] = useState({}); // { msgId: [{ emoji, senderId }] }
   const [activeChatId, setActiveChatId] = useState(null);
   const [replyTo, setReplyTo] = useState(null);
   const messagesEndRef = useRef(null);
 
-  const connectSocket = useCallback((key) => {
-    const socket = io(SERVER_URL || window.location.origin, {
-      auth: { apiKey: key },
-      transports: ['websocket', 'polling']
-    });
-
-    socket.on('new_message', (msg) => {
-      const chatId = msg.chatId?._serialized || msg.chatId || (msg.fromMe ? msg.to : msg.from);
-      if (!chatId) return;
-      setChats(prev => {
-        const updated = { ...prev };
-        if (!updated[chatId]) updated[chatId] = { messages: [] };
-        if (!updated[chatId].messages.some(m => msgId(m) && msgId(m) === msgId(msg))) {
-          updated[chatId].messages.push(msg);
-        }
-        return updated;
-      });
-    });
-
-    socket.on('message_reaction', (data) => {
-      const targetId = data.msgId?._serialized || data.msgId?.id || data.msgId;
-      if (!targetId) return;
-      const sender = typeof data.sender === 'string' ? data.sender : (data.sender?._serialized || String(data.sender));
-      setReactions(prev => {
-        const list = (prev[targetId] || []).filter(r => (r.senderId || r.sender) !== sender);
-        if (!data.orphan && data.reactionText) {
-          list.push({ emoji: data.reactionText, senderId: sender });
-        }
-        return { ...prev, [targetId]: list };
-      });
-    });
-
-    return socket;
-  }, []);
+  // The live stream lives at the app level (connected even while on another
+  // page), so every incoming chat is captured here regardless of navigation.
+  const liveVersion = useSyncExternalStore(
+    (cb) => liveStream.subscribe(cb),
+    () => liveStream.version
+  );
+  void liveVersion;
+  const liveChats = liveStream.getChats();
+  const liveReactions = liveStream.getReactions();
 
   useEffect(() => {
-    let socket;
+    let cancelled = false;
     getApiKey().then(key => {
+      if (cancelled) return;
       setApiKey(key);
       if (!key) return;
 
       axios.get(`${API_URL}/status`, { headers: { 'x-api-key': key } })
         .then(res => {
+          if (cancelled) return;
           setSessionStatus(res.data.status);
           if (res.data.status === 'CONNECTED') {
             fetchChatList(key);
             fetchContacts(key);
-            socket = connectSocket(key);
           }
         })
-        .catch(() => setSessionStatus('DISCONNECTED'));
+        .catch(() => { if (!cancelled) setSessionStatus('DISCONNECTED'); });
     });
 
     const fetchChatList = async (key) => {
@@ -267,24 +254,24 @@ export default function LiveInbox() {
       }
     };
 
-    return () => socket && socket.disconnect();
-  }, [connectSocket]);
+    return () => { cancelled = true; };
+  }, []);
+
+  // Unbind the store's "chat in view" hint when leaving the page so self-sends
+  // route back to their canonical chatId bucket.
+  useEffect(() => () => liveStream.setActiveChat(null), []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chats, activeChatId]);
+  }, [liveVersion, activeChatId]);
 
-  const openChat = (chatId) => setActiveChatId(chatId);
+  const openChat = (chatId) => {
+    setActiveChatId(chatId);
+    liveStream.setActiveChat(chatId);
+  };
 
   const onMessageSent = useCallback((sentMsg) => {
-    setChats(prev => {
-      const updated = { ...prev };
-      const chat = updated[activeChatId];
-      if (!chat) return prev;
-      if (chat.messages.some(m => msgId(m) && msgId(m) === msgId(sentMsg))) return prev;
-      chat.messages.push(sentMsg);
-      return updated;
-    });
+    liveStream.addSentMessage(activeChatId, sentMsg);
   }, [activeChatId]);
 
   const sendReaction = useCallback(async (message, emoji) => {
@@ -309,7 +296,7 @@ export default function LiveInbox() {
   const sidebar = (() => {
     const map = {};
     apiChats.forEach(c => { map[c.id] = { ...c }; });
-    Object.entries(chats).forEach(([chatId, { messages }]) => {
+    Object.entries(liveChats).forEach(([chatId, { messages }]) => {
       const last = messages[messages.length - 1];
       if (!map[chatId]) map[chatId] = { id: chatId, displayName: resolveName(chatId), lastMessage: null, contact: null };
       if (last) map[chatId] = { ...map[chatId], lastMessage: { ...last, timestamp: last.timestamp || 0 } };
@@ -348,7 +335,7 @@ export default function LiveInbox() {
     );
   }
 
-  const activeChatData = activeChatId ? chats[activeChatId] : null;
+  const activeChatData = activeChatId ? liveChats[activeChatId] : null;
 
   return (
     <div className={`flex-1 flex overflow-hidden ${theme === 'dark' ? 'bg-[#0a0c10]' : 'bg-white'}`}>
@@ -385,7 +372,7 @@ export default function LiveInbox() {
               const lastMsg = chat.lastMessage;
               const preview = lastMsg?.previewText || lastMsg?.body || '';
               const isActive = activeChatId === chat.id;
-              const hasLive = Boolean(chats[chat.id]?.messages?.length);
+              const hasLive = Boolean(liveChats[chat.id]?.messages?.length);
 
               return (
                 <button
@@ -433,7 +420,7 @@ export default function LiveInbox() {
           <>
             {/* Chat Header */}
             <div className={`h-16 flex items-center px-6 shrink-0 border-b shadow-sm z-10 ${theme === 'dark' ? 'border-[#1e222b] bg-[#0d1015]' : 'border-slate-200 bg-white'}`}>
-              <button onClick={() => { setActiveChatId(null); setReplyTo(null); }} className="md:hidden p-2 -ml-3 mr-2 text-slate-500">
+              <button onClick={() => { setActiveChatId(null); setReplyTo(null); liveStream.setActiveChat(null); }} className="md:hidden p-2 -ml-3 mr-2 text-slate-500">
                 &larr;
               </button>
               <div className={`w-9 h-9 rounded-full flex items-center justify-center mr-3 ${theme === 'dark' ? 'bg-[#1e222b]' : 'bg-slate-100'}`}>
@@ -464,7 +451,7 @@ export default function LiveInbox() {
                     message={msg}
                     theme={theme}
                     apiKey={apiKey}
-                    reactions={reactions[msgId(msg)] || []}
+                    reactions={liveReactions[msgId(msg)] || []}
                     onReply={(m) => setReplyTo(m)}
                     onReact={sendReaction}
                   />
