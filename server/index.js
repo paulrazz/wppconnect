@@ -36,7 +36,7 @@ app.use('/api', requireApiKey);
 // Serve built client assets
 app.use(express.static(path.join(__dirname, '../client/dist')));
 // Fallback to index.html for SPA routing
-app.get('*', (req, res) => {
+app.get('/{*path}', (req, res) => {
   res.sendFile(path.join(__dirname, '../client/dist', 'index.html'));
 });
 
