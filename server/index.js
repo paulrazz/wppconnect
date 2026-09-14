@@ -56,16 +56,18 @@ io.on('connection', (socket) => {
   console.log('A dashboard client connected:', socket.id, 'for session:', apiKey.substring(0, 8));
   socket.join(`session_${apiKey}`);
   
-  // Bring this user's session into memory (swaps out the active one if different)
-  whatsappService.ensureSessionActive(apiKey).catch(console.error);
+  // We do NOT auto-start the session just because they opened the dashboard.
+  // This saves massive amounts of RAM on Railway.
+  // The user must click "Connect Device" to explicitly start the engine.
 
-  // Send the current status if they are the currently active session
+  // Send the current status if they are the currently active session in memory
   if (whatsappService.currentApiKey === apiKey) {
     socket.emit('session_status', whatsappService.sessionStatus);
     socket.emit('session_details', whatsappService.getStatus());
     if (whatsappService.lastQrCode) socket.emit('qr_code', whatsappService.lastQrCode);
   } else {
-    socket.emit('session_status', 'STARTING');
+    // Their session is not active in RAM right now.
+    socket.emit('session_status', 'DISCONNECTED');
   }
 
   socket.on('disconnect', () => {
