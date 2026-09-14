@@ -13,7 +13,7 @@ const db = new sqlite3.Database(dbPath);
 
 // Initialize schema
 db.serialize(() => {
-  db.run(`
+  db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
     PRAGMA busy_timeout = 5000;

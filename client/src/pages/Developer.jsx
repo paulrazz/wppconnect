@@ -47,7 +47,7 @@ export default function Developer() {
   useEffect(() => {
     getApiKey().then(key => {
       setApiKey(key);
-      axios.get(`/api/status`, { headers: { 'x-api-key': key } })
+      axios.get(`${import.meta.env.VITE_WPPCONNECT_URL || ''}/api/status`, { headers: { 'x-api-key': key } })
         .then(res => setSessionStatus(res.data.status))
         .catch(() => setSessionStatus('DISCONNECTED'));
     });

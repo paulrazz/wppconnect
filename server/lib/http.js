@@ -39,7 +39,7 @@ async function requireApiKey(req, res, next) {
       }
       validApiKeys.add(apiKey);
     } catch (err) {
-      return next(apiError(500, 'DB_ERROR', 'Failed to validate API key'));
+      return next(apiError(500, 'DB_ERROR', 'Failed to validate API key: ' + err.message));
     }
   }
 
