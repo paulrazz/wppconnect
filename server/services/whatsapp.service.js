@@ -72,7 +72,7 @@ class WhatsAppService {
     this.chatPreviewCache = new Map();
     this.passiveMode = true;
     this.lifecycleGeneration = 0;
-    this.deviceInfo = { battery: null, platform: null, network: null, apiStatus: 'Active', updatedAt: null };
+    this.deviceInfo = { battery: null, platform: null, network: null, apiStatus: 'Active', profileName: null, profilePic: null, updatedAt: null };
     this.metricsTimer = null;
   }
 
@@ -111,10 +111,30 @@ class WhatsAppService {
       }).catch(() => null);
       const platform = platformRaw === 'iphone' ? 'iOS' : platformRaw === 'android' ? 'Android' : platformRaw === 'wp' ? 'Windows Phone' : platformRaw;
 
+      // Read-only "me" data (no socket traffic beyond what WhatsApp Web does on boot).
+      let profileName = null;
+      let profilePic = null;
+      try {
+        profileName = (await this.client.getMyProfileName().catch(() => null)) || null;
+      } catch (_) {}
+      try {
+        const me = await this.client.page.evaluate(() => {
+          try {
+            const wid = window.WPP?.whatsapp?.UserPrefs?.getMaybeMeUser?.();
+            return wid ? String(wid) : null;
+          } catch (_) { return null; }
+        }).catch(() => null);
+        if (me) {
+          profilePic = await this.client.page.evaluate((meId) => {
+            try { return window.WPP?.contact?.getProfilePictureUrl?.(meId, false) || null; } catch (_) { return null; }
+          }, me).catch(() => null);
+        }
+      } catch (_) {}
+
       const socketState = await this.client.getConnectionState().catch(() => null);
       const network = socketState === 'CONNECTED' ? 'Stable' : socketState === 'SYNCING' ? 'Syncing' : socketState === 'TIMEOUT' ? 'Reconnecting' : socketState || null;
 
-      this.deviceInfo = { battery, platform, network, apiStatus: 'Active', updatedAt: new Date().toISOString() };
+      this.deviceInfo = { battery, platform, network, apiStatus: 'Active', profileName, profilePic, updatedAt: new Date().toISOString() };
     } catch (_) {
       this.deviceInfo = { ...this.deviceInfo, updatedAt: new Date().toISOString() };
     }
@@ -227,6 +247,15 @@ class WhatsAppService {
       this.setStatus('CONNECTED');
       this.registerListeners(client);
       console.log(`WhatsApp session ready (${this.sessionPath})`);
+      // Restore path: an already-paired profile relaunches the browser with no QR.
+      // `waitForLogin:false` skips wppconnect's own login wait, so verify login
+      // here (read-only) and surface CONNECTED. A fresh/unpaired profile stays in
+      // QR_READY (catchQR already fired) until the user scans.
+      try {
+        if (this.lifecycleGeneration === generation && await client.isLoggedIn()) this.setStatus('CONNECTED');
+      } catch (err) {
+        console.warn('Login state check failed, leaving session in current status:', err.message);
+      }
       clearInterval(this.metricsTimer);
       this.metricsTimer = setInterval(() => void this.refreshDeviceInfo(), 30000);
       if (this.metricsTimer.unref) this.metricsTimer.unref();

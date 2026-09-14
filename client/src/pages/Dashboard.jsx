@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import axios from 'axios';
 import { getApiKey } from '../auth';
@@ -13,6 +13,7 @@ export default function Dashboard() {
   const [qrCode, setQrCode] = useState(null);
   const [metrics, setMetrics] = useState({ ready: false, battery: null, platform: null, connected: false });
   const [apiKey, setApiKey] = useState('');
+  const autoStarted = useRef(false);
   
   // Sandbox State
   const [sandboxTo, setSandboxTo] = useState('');
@@ -30,6 +31,14 @@ export default function Dashboard() {
       axios.get(`${API_URL}/status`).then(({ data }) => {
         setSessionStatus(data.status);
         setMetrics(m => ({ ...m, ready: data.ready, ...data.info }));
+        // Auto-restore: if a saved pairing exists, relaunching the browser will
+        // reconnect without asking for a new QR scan.
+        if (!autoStarted.current && data.status === 'DISCONNECTED') {
+          autoStarted.current = true;
+          setSessionStatus('STARTING');
+          axios.post(`${API_URL}/start-session`, {}, { headers: { 'x-api-key': key } })
+            .catch(() => setSessionStatus('DISCONNECTED'));
+        }
       }).catch(() => setSessionStatus('OFFLINE'));
 
       socket = io(SERVER_URL || window.location.origin, { 
@@ -130,16 +139,20 @@ export default function Dashboard() {
               <AnimatePresence mode="wait">
                 {sessionStatus === 'CONNECTED' ? (
                   <motion.div key="connected" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="w-full text-center">
-                    <div className="relative inline-block mb-8">
+                    <div className="relative inline-block mb-6">
                       <div className="absolute inset-0 bg-emerald-500/20 blur-2xl rounded-full" />
-                      <div className="w-32 h-32 bg-gradient-to-br from-[#12151a] to-[#1e222b] border-2 border-emerald-500/50 rounded-full flex items-center justify-center relative z-10">
-                        <Smartphone className="w-14 h-14 text-emerald-400" />
+                      <div className={`w-32 h-32 ${metrics.profilePic ? '' : 'bg-gradient-to-br from-[#12151a] to-[#1e222b]'} border-2 border-emerald-500/50 rounded-full flex items-center justify-center relative z-10 overflow-hidden`}>
+                        {metrics.profilePic ? (
+                          <img src={metrics.profilePic} alt="WhatsApp profile" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        ) : (
+                          <Smartphone className="w-14 h-14 text-emerald-400" />
+                        )}
                         <motion.div animate={{ scale: [1, 1.2, 1], opacity: [0.5, 0, 0.5] }} transition={{ repeat: Infinity, duration: 2 }} className="absolute inset-0 border border-emerald-400 rounded-full" />
                       </div>
                     </div>
-                    <h2 className="text-3xl font-extrabold text-slate-900 dark:text-white mb-2">Device Connected</h2>
+                    <h2 className="text-3xl font-extrabold text-slate-900 dark:text-white mb-2">{metrics.profileName || 'Device Connected'}</h2>
                     <p className="text-slate-500 dark:text-slate-400 max-w-md mx-auto mb-10">
-                      Your WhatsApp account is successfully linked and ready to send and receive messages.
+                      {metrics.profileName ? `Welcome back, ${metrics.profileName}. Your WhatsApp account is linked and ready to send and receive messages.` : 'Your WhatsApp account is successfully linked and ready to send and receive messages.'}
                     </p>
 
                     {/* Device Metrics Grid */}
