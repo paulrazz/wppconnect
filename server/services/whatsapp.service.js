@@ -60,6 +60,7 @@ class WhatsAppService {
     this.startPromise = null;
     this.lastError = null;
     this.connectedAt = null;
+    this.lastQrCode = null;
     this.statusCache = {};
     this.chatPreviewCache = new Map();
     this.passiveMode = true;
@@ -71,6 +72,7 @@ class WhatsAppService {
   setStatus(status, error = null) {
     this.sessionStatus = status;
     this.lastError = error ? (error.message || String(error)) : null;
+    if (status !== 'QR_READY') this.lastQrCode = null;
     if (status === 'CONNECTED') this.connectedAt = new Date().toISOString();
     this.io?.emit('session_status', status);
     this.io?.emit('session_details', this.getStatus());
@@ -97,7 +99,7 @@ class WhatsAppService {
     try {
       const client = await wppconnect.create({
         session: this.sessionName,
-        catchQR: (base64Qr) => { this.setStatus('QR_READY'); this.io?.emit('qr_code', base64Qr); },
+        catchQR: (base64Qr) => { this.lastQrCode = base64Qr; this.setStatus('QR_READY'); this.io?.emit('qr_code', base64Qr); },
         statusFind: (status) => {
           console.log('WhatsApp auth status:', status);
           if (['isLogged', 'inChat', 'qrReadSuccess'].includes(status)) this.setStatus('CONNECTED');

@@ -54,6 +54,7 @@ io.on('connection', (socket) => {
   // Send the current status upon connection
   socket.emit('session_status', whatsappService.sessionStatus);
   socket.emit('session_details', whatsappService.getStatus());
+  if (whatsappService.lastQrCode) socket.emit('qr_code', whatsappService.lastQrCode);
 
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
