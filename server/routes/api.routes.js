@@ -58,7 +58,14 @@ router.get('/status', (req, res) => {
 // first signed in, readable without an active WhatsApp connection.
 router.get('/inbox', async (req, res) => {
   try {
-    res.json(await inboxStore.getChats(res.locals.apiKey));
+    const data = await inboxStore.getChats(res.locals.apiKey);
+    // Annotate each row with the sender's profile picture from the avatar
+    // cache so the sidebar renders faces without a second round-trip.
+    whatsappService.decorateChatsWithAvatars(res.locals.apiKey, data.chats);
+    // And heal group rows with their real subject whenever the durable row
+    // still holds a number or a sender-name recorded before the fix.
+    whatsappService.decorateGroupNames(res.locals.apiKey, data.chats);
+    res.json(data);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -186,7 +193,12 @@ router.get('/stories', async (req, res) => {
   try {
     res.setHeader('x-status-read-receipts', 'disabled');
     const stories = await whatsappService.getStatuses(res.locals.apiKey);
-    res.json(stories);
+    // Carry cached sender avatars with the status payload so the client can
+    // draw faces next to each status feed immediately. The `__profiles` key
+    // is a map of senderId -> dataUrl; the client reads it alongside the
+    // regular grouped object (array keys are unaffected by own properties).
+    const profiles = whatsappService.statusProfiles(res.locals.apiKey, Object.keys(stories));
+    res.json({ __profiles: profiles, ...stories });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

@@ -30,6 +30,8 @@ function createLiveStream() {
   const statuses = {};    // senderId -> [status updates] (one "status chat" per sender)
   const reactions = {};   // msgId -> [{ emoji, senderId }]
   const automationEvents = []; // recent rule executions (ran / error)
+  const avatars = {};     // chatId / senderId -> profile picture dataUrl
+  const chatNames = {};   // group chatId -> group subject (heals listing names)
 
   // Per-chat version counters + subscribers. The open conversation subscribes
   // to its OWN chat's version so a message landing in any OTHER chat (which
@@ -126,6 +128,13 @@ const pushMessage = (message, targetId) => {
   const applySocketHandlers = () => {
     socket.on('new_message', (message) => {
       const chatId = chatIdOf(message);
+      // A group message carries the group subject - keep the sidebar's group
+      // listing name pointed at the real name even if the durable row was
+      // recorded with a number or a sender-name clobber.
+      const groupName = message?.chatName || message?.chat?.name || message?.groupName;
+      if (chatId && groupName && typeof chatId === 'string' && chatId.endsWith('@g.us') && chatNames[chatId] !== groupName) {
+        chatNames[chatId] = groupName;
+      }
       if (!chatId) return;
       const touched = [];
       if (isSelfMessage(message) && activeChatId && activeChatId !== chatId) {
@@ -216,6 +225,15 @@ const pushMessage = (message, targetId) => {
     socket.on('session_details', (details) => sessionStore.setDetails(details));
     socket.on('qr_code', (qrBase64) => sessionStore.setQr(qrBase64));
 
+    // A background avatar fetch on the server just finished - update the
+    // sidebar / header the instant it lands, with no client polling.
+    socket.on('avatar_ready', ({ id, dataUrl }) => {
+      if (id && dataUrl && avatars[id] !== dataUrl) {
+        avatars[id] = dataUrl;
+        notify();
+      }
+    });
+
     socket.on('automation_event', (event) => {
       automationEvents.unshift({ ...event, receivedAt: Date.now() });
       if (automationEvents.length > 50) automationEvents.length = 50;
@@ -287,6 +305,27 @@ const pushMessage = (message, targetId) => {
       }
     },
     getStatuses: () => statuses,
+    setAvatar: (id, dataUrl) => { if (id && dataUrl && avatars[id] !== dataUrl) { avatars[id] = dataUrl; notify(); } },
+    getAvatars: () => avatars,
+    // Group name map: chatId -> group subject. Used to resolve a group's
+    // listing/header name without waiting on a contacts or chats round-trip.
+    setChatName: (chatId, name) => {
+      if (!chatId || !name) return;
+      const key = typeof chatId === 'string' ? chatId : chatId?._serialized;
+      if (key && !key.endsWith('@g.us')) return;
+      if (key && chatNames[key] !== name) { chatNames[key] = name; notify(); }
+    },
+    setChatNames: (rows) => {
+      let changed = false;
+      for (const row of Array.isArray(rows) ? rows : []) {
+        const id = typeof row?.id === 'string' ? row.id : row?.id?._serialized;
+        const name = row?.chatName || row?.name || row?.groupMetadata?.subject || row?.groupName;
+        if (!id || !id.endsWith('@g.us') || !name) continue;
+        if (chatNames[id] !== name) { chatNames[id] = name; changed = true; }
+      }
+      if (changed) notify();
+    },
+    getChatNames: () => chatNames,
     subscribe: (fn) => {
       listeners.add(fn);
       return () => listeners.delete(fn);

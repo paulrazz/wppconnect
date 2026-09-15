@@ -75,7 +75,7 @@ function hashKey(key) {
 // id field ending in @g.us and force a normalized chatId onto the message so
 // the socket stream, event ledger, inbox store and clients all agree on the
 // bucket - while keeping author/participant/pushName intact for attribution.
-function normalizeChatIdentity(message) {
+function normalizeChatIdentity(message, apiKey) {
   if (!message || typeof message !== 'object') return message;
   const idOf = (value) => typeof value === 'string' ? value : (value?._serialized || value?.id || '');
   const candidates = [
@@ -102,7 +102,11 @@ function normalizeChatIdentity(message) {
     || stringOrEmpty(message.subject)
     || stringOrEmpty(message.chatName)
     || '';
-  return { ...message, chatId: { _serialized: chatId }, isGroupMsg: true, isGroup: true, groupName };
+  const normalized = { ...message, chatId: { _serialized: chatId }, isGroupMsg: true, isGroup: true, groupName };
+  // Warm the group-name cache for this chat so the durable inbox rows (and
+  // the client's name map) can heal numeric/sender-name display labels.
+  if (apiKey) whatsappService.rememberGroupNames(apiKey, [{ chatId, name: groupName }]);
+  return normalized;
 }
 
 // Status timestamps arrive as seconds; only a couple of wppconnect paths use
@@ -112,6 +116,12 @@ function statusTimestamp(message) {
   if (!n) return Math.floor(Date.now() / 1000);
   return n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
 }
+
+// Profile pictures: cached on disk for 24h so the sidebar costs a disk read,
+// never a WhatsApp round-trip. Background fetches are capped so even the very
+// first sync of a big account never bursts WhatsApp with avatar requests.
+const AVATAR_TTL_MS = Math.min(Math.max(Number(process.env.AVATAR_TTL_MS) || 24 * 60 * 60 * 1000, 60 * 60 * 1000), 7 * 24 * 60 * 60 * 1000);
+const AVATAR_CONCURRENCY = 4;
 
 // Per-API-key runtime state. One of these exists for every key anyone has
 // ever touched (started/stopped/queried), but only `client` or `startPromise`
@@ -129,6 +139,10 @@ class Session {
     this.statusCache = {};
     this.chatPreviewCache = new Map();
     this.contactsCache = null;
+    // chatId -> group subject, warmed from the live chat list and from every
+    // group message we normalize. Used to heal group display names in the
+    // sidebar when the durable row holds a number or an old sender's name.
+    this.groupNameCache = new Map();
     this.passiveMode = true;
     this.deviceInfo = { battery: null, platform: null, network: null, apiStatus: 'Active', profileName: null, profilePic: null, updatedAt: null };
     this.metricsTimer = null;
@@ -141,6 +155,10 @@ class WhatsAppService {
   constructor() {
     this.sessions = new Map();
     this.io = null;
+    // Avatar background fetch bookkeeping (dedupe + concurrency cap).
+    this.avatarInflight = new Map(); // "apiKey\u0000id" -> true
+    this.avatarQueue = [];           // queued "apiKey\u0000id" while saturated
+    this.avatarRunning = 0;
   }
 
   setIo(io) { this.io = io; }
@@ -394,7 +412,7 @@ class WhatsAppService {
       // Force a canonical chatId for group messages first, so every consumer
       // below (media cache, inbox store, socket stream, ledger, automation)
       // buckets and attributes the message identically.
-      const message = normalizeChatIdentity(raw);
+      const message = normalizeChatIdentity(raw, session.apiKey);
       // Preserve media while it is still downloadable. WhatsApp can remove
       // the live message immediately when the sender chooses Delete for all.
       if (['image', 'video', 'gif', 'audio', 'ptt', 'sticker', 'document'].includes(String(message.type || '').toLowerCase())) {
@@ -686,6 +704,10 @@ class WhatsAppService {
     const enriched = await Promise.all(chats.map(async (chat) => {
       const embeddedMessages = Array.isArray(chat.msgs) ? chat.msgs : (chat.msgs?.models || []);
       const chatId = chat.id?._serialized || chat.id;
+      // Every listChats row carries the group subject (chat.name /
+      // groupMetadata.subject) - feed the cache so group-name display labels
+      // can be healed everywhere, including on the durable inbox rows.
+      this.rememberGroupNames(apiKey, [chat]);
       let lastMessage = session.chatPreviewCache.get(chatId) || livePreviews[chatId] || chat.lastMessage || embeddedMessages[embeddedMessages.length - 1] || null;
       // Never fan out into one history query per chat here. On large accounts
       // that turns a cheap list request into hundreds of sequential IndexedDB
@@ -719,6 +741,9 @@ class WhatsAppService {
         })(),
       };
     }));
+    // Attach cached profile pictures (or queue background fetches for the
+    // missing ones) so the sidebar avatars render without extra round-trips.
+    this.decorateChatsWithAvatars(apiKey, enriched);
     const result = { items: enriched, total: allChats.length, offset: safeOffset, limit: safeLimit, hasMore: safeOffset + enriched.length < allChats.length };
     this.chatsCache ??= new Map();
     this.chatsCache.set(apiKey, { key: cacheKey, at: Date.now(), value: result });
@@ -765,6 +790,152 @@ class WhatsAppService {
     const data = await this.requireClient(apiKey).getAllContacts();
     session.contactsCache = { timestamp: Date.now(), data };
     return data;
+  }
+
+  // Resolve a contact/group's avatar to a base64 dataUrl, running entirely
+  // inside the session's Chromium page so WhatsApp's blob: URLs are fetchable
+  // there. Serves nothing stale - returns null when there is no picture.
+  async profilePicDataUrl(apiKey, id) {
+    const client = this.getSession(apiKey)?.client;
+    if (!client || !id) return null;
+    try {
+      return await withTimeout(client.page.evaluate(async (wid) => {
+        const WPP = globalThis.WPP;
+        const toDataUrl = async (url) => {
+          if (!url || typeof url !== 'string') return null;
+          try {
+            const res = await fetch(url);
+            if (!res.ok) return null;
+            const blob = await res.blob();
+            return await new Promise((resolve) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result);
+              reader.onerror = () => resolve(null);
+              reader.readAsDataURL(blob);
+            });
+          } catch (_) { return null; }
+        };
+        // 1) The page's own contact store usually already holds the thumbnail
+        //    (a blob URL). Prefer it - zero extra network when warm.
+        const contact = WPP?.whatsapp?.ContactStore?.get(wid);
+        const thumb = contact?.profilePicThumbObj || {};
+        for (const url of [thumb.img, thumb.imgFull, thumb.url]) {
+          const dataUrl = await toDataUrl(url);
+          if (dataUrl) return dataUrl;
+        }
+        // 2) Otherwise ask WhatsApp for the (cache-busted) picture URL.
+        try {
+          const url = await WPP?.contact?.getProfilePictureUrl?.(wid, false);
+          return await toDataUrl(url);
+        } catch (_) { return null; }
+      }, id), 12000);
+    } catch (_) { return null; }
+  }
+
+  // One miss resolves the avatar, caches it, and ships it to the tenant's
+  // room - filling the sidebar the moment it arrives, with no client polling.
+  fetchAvatar(apiKey, id) {
+    return this.profilePicDataUrl(apiKey, id).then((dataUrl) => {
+      if (dataUrl) {
+        eventStore.cacheAvatar(id, dataUrl);
+        this.io?.to(`session_${apiKey}`).emit('avatar_ready', { id, dataUrl });
+      }
+      return dataUrl;
+    });
+  }
+
+  // Background, deduped, concurrency-capped avatar fetch. Safe to call on
+  // every request for any number of ids - misses are fetched at most once,
+  // and only four WhatsApp profile calls run at a time.
+  queueAvatar(apiKey, id) {
+    if (!id || typeof id !== 'string') return;
+    const key = `${apiKey}\u0000${id}`;
+    if (this.avatarInflight.has(key) || this.avatarRunning >= AVATAR_CONCURRENCY) {
+      if (!this.avatarInflight.has(key)) this.avatarQueue.push(key);
+      return;
+    }
+    this.avatarRunning += 1;
+    this.avatarInflight.set(key, true);
+    this.fetchAvatar(apiKey, id).finally(() => {
+      this.avatarInflight.delete(key);
+      this.avatarRunning -= 1;
+      if (this.avatarQueue.length && this.avatarRunning < AVATAR_CONCURRENCY) {
+        const nextKey = this.avatarQueue.shift();
+        const sep = nextKey.indexOf('\u0000');
+        this.queueAvatar(nextKey.slice(0, sep), nextKey.slice(sep + 1));
+      }
+    });
+  }
+
+  // Decorate an array of chat-like rows ({ id }) with `profilePic` from the
+  // avatar disk cache. Cache hits are one disk read each; misses are fetched
+  // in the background (only while WhatsApp is connected) and never block the
+  // request - the surface fills in via avatar_ready as each fetch resolves.
+  decorateChatsWithAvatars(apiKey, chats = []) {
+    try {
+      const connected = Boolean(this.getSession(apiKey)?.client);
+      for (const chat of chats) {
+        const id = chat?.id?._serialized || chat?.id;
+        if (typeof id !== 'string' || !id) continue;
+        const cached = eventStore.getCachedAvatar(id, AVATAR_TTL_MS);
+        if (cached) { chat.profilePic = cached; continue; }
+        if (connected) this.queueAvatar(apiKey, id);
+      }
+    } catch (_) { /* Decoration is best-effort; the list renders without avatars. */ }
+    return chats;
+  }
+
+  // Per-sender avatars for the status payload. Returns { senderId: dataUrl }
+  // only for cached entries - misses queue a background fetch (their picture
+  // shows up via avatar_ready after it resolves).
+  statusProfiles(apiKey, senderIds = []) {
+    const profiles = {};
+    for (const senderId of senderIds) {
+      if (!senderId || senderId === 'status@broadcast') continue;
+      const cached = eventStore.getCachedAvatar(senderId, AVATAR_TTL_MS);
+      if (cached) { profiles[senderId] = cached; continue; }
+      this.queueAvatar(apiKey, senderId);
+    }
+    return profiles;
+  }
+
+  // Member of the group-name cache: chatId -> group subject. Warmed from the
+  // live chat list and from every normalized group message, so the durable
+  // inbox rows (and the client's name map) can always heal a row whose display
+  // name is still a bare number or whatever sender-name got persisted before.
+  rememberGroupNames(apiKey, rows) {
+    const session = this.getSession(apiKey);
+    if (!session) return;
+    for (const row of Array.isArray(rows) ? rows : [rows]) {
+      if (!row || typeof row !== 'object') continue;
+      const chatId = row.chatId || row.id?._serialized || row.id;
+      const name = row.name || row.groupName || row.groupMetadata?.subject || row.chatName;
+      if (typeof chatId === 'string' && /@g\.us$/.test(chatId) && typeof name === 'string' && name.trim()) {
+        session.groupNameCache.set(chatId, name.trim());
+      }
+    }
+  }
+
+  // Decorate durable inbox rows with their real group subject from the live
+  // cache. The durable row may still hold a bare number (recorded pre-fix) or a
+  // sender-name (recorded while the clobber bug was live) - `chatName` lets the
+  // client prefer the resolved group name, and numeric display_names are healed
+  // in place so nothing downstream shows a raw JID.
+  decorateGroupNames(apiKey, chats = []) {
+    const names = this.getSession(apiKey)?.groupNameCache;
+    if (!names) return chats;
+    for (const chat of chats) {
+      const chatId = chat?.id || chat?.chatId;
+      if (typeof chatId !== 'string' || !/^[^@\s]+@g\.us$/.test(chatId)) continue;
+      const groupName = names.get(chatId);
+      if (!groupName) continue;
+      chat.chatName = groupName;
+      const current = chat.displayName || chatId;
+      // Heal year-long numeric labels outright; a sender-name or a real subject
+      // is left to the client (chatName is preferred there regardless).
+      if (/^\+?[\d\s()\-]+$/.test(current)) chat.displayName = groupName;
+    }
+    return chats;
   }
 
   getGroups(apiKey) { return this.requireClient(apiKey).getAllGroups(); }

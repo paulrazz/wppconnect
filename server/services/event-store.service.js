@@ -155,6 +155,34 @@ class EventStore {
     try { return JSON.parse(fs.readFileSync(`${target}.json`, 'utf8')); } catch (_) { return null; }
   }
 
+  avatarFile(id) {
+    const safe = this.idOf(id).replace(/[^A-Za-z0-9._-]/g, '_');
+    return safe ? path.join(this.mediaDirectory, 'avatars', `${safe}.json`) : null;
+  }
+
+  // Profile pictures are durable dataUrls cached on disk (like media). A 24h
+  // TTL keeps them fresh enough that a changed avatar shows up next day, while
+  // the sidebar re-render stays free (zero WhatsApp round-trips on cache hit).
+  cacheAvatar(id, dataUrl) {
+    const target = this.avatarFile(id);
+    if (!target || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) return false;
+    try {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, JSON.stringify({ dataUrl, fetchedAt: Date.now() }));
+      return true;
+    } catch (_) { return false; }
+  }
+  getCachedAvatar(id, ttlMs = 24 * 60 * 60 * 1000) {
+    const target = this.avatarFile(id);
+    if (!target) return null;
+    try {
+      const json = JSON.parse(fs.readFileSync(target, 'utf8'));
+      if (!json?.dataUrl || typeof json.dataUrl !== 'string') return null;
+      if (ttlMs && Date.now() - (json.fetchedAt || 0) > ttlMs) return null;
+      return json.dataUrl;
+    } catch (_) { return null; }
+  }
+
   list({ type, types, limit = 100, chatId } = {}) {
     try {
       const lines = fs.readFileSync(this.file, 'utf8').trim().split('\n').filter(Boolean);

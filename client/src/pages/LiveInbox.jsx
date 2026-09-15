@@ -62,6 +62,21 @@ const statusTypeLabel = (s) => {
   return type.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') || 'Status';
 };
 
+// The name to render as a group message's sender title. WhatsApp group bubbles
+// carry `sender` (a contact object) / `author` / `pushname` / `notifyName`;
+// fall back to the JID's local part so the title is never blank.
+const groupSenderDisplayName = (message) => {
+  const contact = message?.sender || {};
+  const jidRaw = message?.author || message?.participant || (typeof message?.sender?.id === 'object' ? message.sender.id._serialized : message?.sender?.id);
+  const jid = typeof jidRaw === 'string' ? jidRaw : jidRaw?._serialized || '';
+  return String(
+    contact.name || contact.formattedName || contact.pushname || contact.shortName
+    || message?.notifyName || message?.friendName || message?.pushname
+    || (jid && !jid.startsWith('@') ? jid.split('@')[0] : '')
+    || ''
+  ).trim();
+};
+
 // The canonical (non "_out") id - matches what WhatsApp/our API emit reactions under.
 const canonicalId = (m) => (msgId(m) || '').replace(/_out$/, '');
 
@@ -161,12 +176,38 @@ function MediaContent({ message, apiKey, theme, className = '' }) {
   return null;
 }
 
-function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReact }) {
+// A circular avatar that renders the profile picture (server-decorated or
+// live `avatar_ready` push) and falls back to the UserCircle icon when there
+// is none yet. `pic` is the resolved dataUrl, `size` controls the `<img>`.
+function ChatAvatar({ pic, size = 32, theme }) {
+  const [broken, setBroken] = useState(false);
+  useEffect(() => setBroken(false), [pic]);
+  if (pic && !broken) {
+    return (
+      <img
+        src={pic}
+        alt=""
+        onError={() => setBroken(true)}
+        style={{ width: size, height: size }}
+        className="rounded-full object-cover shrink-0"
+      />
+    );
+  }
+  return <UserCircle style={{ width: size, height: size }} className={`shrink-0 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`} />;
+}
+
+function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReact, activeChatId }) {
   const [showReactions, setShowReactions] = useState(false);
   const type = String(message.type || 'chat').toLowerCase();
   const isMe = message.fromMe || message.isSentByMe || message.isSendByMe;
   const isMedia = MEDIA_TYPES.includes(type);
   const isDeleted = message.isDeleted || message.isRevoked || type === 'revoked';
+  // Group messages show the SENDER as a small title above the bubble (like
+  // WhatsApp). This never touches the sidebar listing name - the chat list
+  // keeps the group's own name; the sender label lives in the chat view only.
+  const isGroupChat = message.isGroupMsg === true || message.isGroup === true
+    || (typeof activeChatId === 'string' && activeChatId.endsWith('@g.us'));
+  const senderTitle = isGroupChat ? groupSenderDisplayName(message) : '';
 
   const quote = (() => {
     const q = message.quotedMsgObj || message.quotedMsg || (message.quotedMsgObj?.value);
@@ -187,6 +228,11 @@ function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReac
 
   return (
     <div className={`flex flex-col max-w-[78%] ${isMe ? 'self-end items-end' : 'self-start items-start'}`}>
+      {!isMe && senderTitle && (
+        <p className={`text-[10px] font-bold uppercase tracking-wide mb-0.5 px-1 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+          {senderTitle}
+        </p>
+      )}
       <div className={`px-3 py-2.5 rounded-2xl ${isMe ? 'bg-indigo-600 text-white rounded-tr-sm shadow-indigo-500/20' : (theme === 'dark' ? 'bg-[#1e222b] text-slate-200 rounded-tl-sm' : 'bg-white border border-slate-200 text-slate-800 rounded-tl-sm')} shadow-sm w-fit max-w-full min-w-[2rem]`}>
         {quote && (
           <div className={`mb-2 px-3 py-2 rounded-lg border-l-4 text-xs ${isMe ? 'bg-indigo-500/30 border-indigo-300' : (theme === 'dark' ? 'bg-black/30 border-slate-500' : 'bg-slate-100 border-slate-400')}`}>
@@ -354,6 +400,7 @@ function ActiveChatMessages({ chatId, apiKey, theme, hasMore, loadingEarlier, on
             reactions={merged}
             onReply={onReply}
             onReact={onReact}
+            activeChatId={chatId}
           />
         );
       })}
@@ -464,6 +511,11 @@ export default function LiveInbox() {
   void liveVersion;
   const liveChats = liveStream.getChats();
 
+  // Profile pictures are filled server-side (cache-first + background fetch)
+  // and pushed live the moment a miss resolves. One map covers all chat &
+  // status rows, keyed by the raw chatId / senderId.
+  const avatars = liveStream.getAvatars();
+
   const CHATS_CACHE_KEY = (key) => `wpp.chats.${key}`;
   const readCachedChats = (key) => {
     try {
@@ -485,8 +537,10 @@ export default function LiveInbox() {
       return {
         id,
         displayName: c.displayName || (id.split('@')[0] || id),
+        chatName: c.chatName || c.name || c.groupMetadata?.subject || null,
         lastMessage: c.lastMessage || null,
         contact: c.contact || null,
+        profilePic: c.profilePic || null,
       };
     };
     try {
@@ -501,6 +555,10 @@ export default function LiveInbox() {
       ]);
       const inboxChats = inboxRes.status === 'fulfilled' && Array.isArray(inboxRes.value.data?.chats) ? inboxRes.value.data.chats : [];
       const liveChats = liveRes.status === 'fulfilled' && Array.isArray(liveRes.value.data?.chats) ? liveRes.value.data.chats : [];
+      // Feed the group-name map from both sources so the sidebar resolves a
+      // group by its real subject, not a bare number or a sender name.
+      liveStream.setChatNames(inboxChats);
+      liveStream.setChatNames(liveChats);
       if (inboxRes.status === 'fulfilled' && inboxRes.value.data?.startedAt) setInboxSince(inboxRes.value.data.startedAt);
       const merged = new Map();
       inboxChats.forEach(c => { const m = mapChat(c); if (m.id) merged.set(m.id, m); });
@@ -512,6 +570,11 @@ export default function LiveInbox() {
         if (!existing.displayName || existing.displayName.includes('@')) existing.displayName = m.displayName || existing.displayName;
       });
       const mapped = [...merged.values()].filter(c => c.id);
+      // Seed the live avatar map with the already-decorated profile pictures
+      // so the chat header (keyed by chatId) resolves a face immediately too.
+      for (const chat of mapped) {
+        if (chat.profilePic) liveStream.setAvatar(chat.id, chat.profilePic);
+      }
       setApiChats(mapped);
       try { localStorage.setItem(CHATS_CACHE_KEY(key), JSON.stringify({ chats: mapped, at: Date.now() })); } catch (_) {}
     } catch (err) {
@@ -539,7 +602,16 @@ export default function LiveInbox() {
       const res = await axios.get(`${API_URL}/stories`, { headers: { 'x-api-key': key } });
       const grouped = res.data;
       if (!grouped || typeof grouped !== 'object') return;
+      // The server attaches __profiles (senderId → dataUrl) alongside the
+      // regular grouped payloads so status feeds carry faces immediately.
+      const profiles = grouped?.__profiles;
+      if (profiles && typeof profiles === 'object') {
+        for (const senderId of Object.keys(profiles)) {
+          if (profiles[senderId]) liveStream.setAvatar(senderId, profiles[senderId]);
+        }
+      }
       for (const senderId of Object.keys(grouped)) {
+        if (senderId === '__profiles') continue;
         const list = Array.isArray(grouped[senderId]) ? grouped[senderId] : [];
         if (list.length) liveStream.seedStatuses(senderId, list);
       }
@@ -589,6 +661,9 @@ export default function LiveInbox() {
     setActiveChatId(chatId);
     setReplyTo(null);
     liveStream.setActiveChat(chatId);
+    // When opening from search, ensure the sidebar tab matches the result type
+    // so the active row stays visible.
+    setSidebarTab(isStatusChat(chatId) ? 'status' : 'chats');
     if (isStatusChat(chatId)) {
       // A status "chat" is the contact's story feed. If the live bucket is
       // still empty on open, pull it from the server's status history.
@@ -689,6 +764,8 @@ export default function LiveInbox() {
 
   const resolveName = (chatId) => {
     if (!chatId) return 'Unknown';
+    const names = liveStream.getChatNames();
+    if (names[chatId]) return names[chatId];
     if (contacts[chatId]?.name) return contacts[chatId].name;
     if (contacts[chatId]?.pushname) return contacts[chatId].pushname;
     if (contacts[chatId]?.verifiedName) return contacts[chatId].verifiedName;
@@ -703,10 +780,14 @@ export default function LiveInbox() {
   // version bump and list/contact changes.
   const sidebar = useMemo(() => {
     const map = {};
-    apiChats.forEach(c => { map[c.id] = { ...c, isStatus: false }; });
+    const names = liveStream.getChatNames();
+    apiChats.forEach(c => {
+      const displayName = c.chatName || (names[c.id] || c.displayName);
+      map[c.id] = { ...c, displayName, isStatus: false, profilePic: c.profilePic || avatars[c.id] || null };
+    });
     Object.entries(liveChats).forEach(([chatId, { messages }]) => {
       const last = messages[messages.length - 1];
-      if (!map[chatId]) map[chatId] = { id: chatId, displayName: resolveName(chatId), lastMessage: null, contact: null, isStatus: false };
+      if (!map[chatId]) map[chatId] = { id: chatId, displayName: resolveName(chatId), lastMessage: null, contact: null, isStatus: false, profilePic: avatars[chatId] || null };
       if (last) map[chatId] = { ...map[chatId], lastMessage: { ...last, timestamp: last.timestamp || 0 } };
     });
     const allStatuses = liveStream.getStatuses();
@@ -722,11 +803,18 @@ export default function LiveInbox() {
         displayName,
         contact: null,
         isStatus: true,
+        profilePic: avatars[senderId] || null,
+        senderId,
         lastMessage: { ...newest, timestamp: statusTime(newest), previewText: messagePreview({ ...newest, timestamp: statusTime(newest) }) },
       };
     }
     return Object.values(map).sort((a, b) => (b.lastMessage?.timestamp || 0) - (a.lastMessage?.timestamp || 0));
-  }, [apiChats, liveChats, liveVersion, contacts]);
+  }, [apiChats, liveChats, liveVersion, contacts, avatars]);
+  const [sidebarTab, setSidebarTab] = useState('chats');
+  const chatRows = useMemo(() => sidebar.filter(c => !c.isStatus), [sidebar]);
+  const statusRows = useMemo(() => sidebar.filter(c => c.isStatus), [sidebar]);
+  const activeRows = sidebarTab === 'status' ? statusRows : chatRows;
+  const sidebarCount = sidebarTab === 'status' ? statusRows.length : chatRows.length;
 
   if (sessionStatus !== 'CONNECTED') {
     return (
@@ -765,8 +853,32 @@ export default function LiveInbox() {
             </p>
           </div>
           <span className="ml-auto text-xs font-semibold bg-indigo-500/10 text-indigo-500 px-2 py-1 rounded-full border border-indigo-500/20 shrink-0">
-            {sidebar.length} chats
+            {sidebarCount} {sidebarTab === 'status' ? 'statuses' : 'chats'}
           </span>
+        </div>
+
+        {/* Tabs: Chats vs Status. Statuses live in their own feed so the chat
+            list stays focused on conversations. */}
+        <div className={`flex gap-1 px-4 pt-3 border-b shrink-0 ${theme === 'dark' ? 'border-[#1e222b]' : 'border-slate-200'}`}>
+          {[
+            { id: 'chats', label: 'Chats' },
+            { id: 'status', label: 'Status', count: statusRows.length },
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setSidebarTab(tab.id)}
+              className={`flex-1 px-3 py-2 rounded-t-lg text-sm font-semibold transition-colors ${sidebarTab === tab.id
+                ? (tab.id === 'status' ? (theme === 'dark' ? 'bg-emerald-500/10 text-emerald-400 border-b-2 border-emerald-500' : 'bg-emerald-50 text-emerald-700 border-b-2 border-emerald-500') : (theme === 'dark' ? 'bg-[#16191f] text-indigo-400 border-b-2 border-indigo-500' : 'bg-indigo-50 text-indigo-700 border-b-2 border-indigo-500'))
+                : (theme === 'dark' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
+            >
+              {tab.label}
+              {tab.label === 'Status' && statusRows.length > 0 && (
+                <span className={`ml-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full align-middle ${theme === 'dark' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-100 text-emerald-700'}`}>
+                  {tab.count}
+                </span>
+              )}
+            </button>
+          ))}
         </div>
 
         {/* Search */}
@@ -786,28 +898,39 @@ export default function LiveInbox() {
             <div className={`mt-2 max-h-72 overflow-y-auto rounded-lg border shadow-xl ${theme === 'dark' ? 'bg-[#12151a] border-[#262931]' : 'bg-white border-slate-200'}`}>
               {searchResults.length === 0 ? (
                 <p className={`px-3 py-3 text-xs ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>No messages match “{searchQuery.trim()}”.</p>
-              ) : searchResults.map((r, i) => (
+              ) : searchResults.map((r, i) => {
+                const resultIsStatus = isStatusChat(r.chatId);
+                if (sidebarTab === 'status' && !resultIsStatus) return null;
+                if (sidebarTab === 'chats' && resultIsStatus) return null;
+                return (
                 <button
                   key={`${r.chatId}-${r.message?.id || i}`}
-                  onClick={() => { openChat(r.chatId); setSearchQuery(''); setSearchResults([]); }}
+                  onClick={() => { openChat(r.chatId); if (resultIsStatus) setSidebarTab('status'); setSearchQuery(''); setSearchResults([]); }}
                   className={`w-full text-left px-3 py-2 border-b last:border-0 ${theme === 'dark' ? 'border-[#1e222b] hover:bg-[#1c2028]' : 'border-slate-100 hover:bg-slate-50'}`}
                 >
                   <p className={`text-xs font-semibold truncate ${theme === 'dark' ? 'text-slate-200' : 'text-slate-700'}`}>{r.displayName}</p>
                   <p className={`text-xs truncate ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>{r.message?.previewText || r.message?.body}</p>
                 </button>
-              ))}
+              );
+              })}
             </div>
           )}
         </div>
 
         {/* List */}
         <div className="flex-1 overflow-y-auto">
-          {sidebar.length === 0 ? (
+          {activeRows.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full p-8 text-center">
               {listsLoading ? (
                 <>
                   <LoaderCircle className={`w-12 h-12 mb-4 animate-spin opacity-50 ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-500'}`} />
                   <p className={`text-sm font-medium ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Loading conversations...</p>
+                </>
+              ) : sidebarTab === 'status' ? (
+                <>
+                  <span className="text-4xl mb-4 opacity-60">📷</span>
+                  <p className={`text-sm font-medium ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>No statuses yet</p>
+                  <p className={`text-xs mt-2 text-center ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>Stories your contacts post will appear here the moment they publish.</p>
                 </>
               ) : (
                 <>
@@ -818,11 +941,12 @@ export default function LiveInbox() {
               )}
             </div>
           ) : (
-            sidebar.map(chat => {
+            activeRows.map(chat => {
                 const lastMsg = chat.lastMessage;
                 const preview = lastMsg?.previewText || messagePreview(lastMsg) || '';
                 const isActive = activeChatId === chat.id;
                 const hasLive = Boolean(liveChats[chat.id]?.messages?.length);
+                const pic = chat.profilePic || (chat.senderId && avatars[chat.senderId]) || null;
 
                 return (
                   <button
@@ -830,16 +954,22 @@ export default function LiveInbox() {
                     onClick={() => openChat(chat.id)}
                     className={`w-full flex items-center p-4 border-b text-left transition-colors ${theme === 'dark' ? 'border-[#1e222b]' : 'border-slate-100'} ${isActive ? (theme === 'dark' ? 'bg-[#1c2028]' : 'bg-indigo-50') : (theme === 'dark' ? 'hover:bg-[#16191f]' : 'hover:bg-slate-100')}`}
                   >
-                    <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 mr-4 ${chat.isStatus ? (theme === 'dark' ? 'bg-emerald-500/10' : 'bg-emerald-100') : (theme === 'dark' ? 'bg-[#262931]' : 'bg-slate-200')}`}>
-                      {chat.isStatus
-                        ? <span className={`text-lg ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>📷</span>
-                        : <UserCircle className={`w-8 h-8 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`} />}
+                    <div className="w-12 h-12 rounded-full flex items-center justify-center shrink-0 mr-4 overflow-hidden">
+                      {chat.isStatus ? (
+                        pic
+                          ? <img src={pic} alt="" className="w-12 h-12 rounded-full object-cover" />
+                          : <span className={`w-12 h-12 rounded-full flex items-center justify-center ${theme === 'dark' ? 'bg-emerald-500/10' : 'bg-emerald-100'}`}><span className={`text-lg ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>📷</span></span>
+                      ) : (
+                        pic
+                          ? <img src={pic} alt="" className="w-12 h-12 rounded-full object-cover" />
+                          : <span className={`w-12 h-12 rounded-full flex items-center justify-center ${theme === 'dark' ? 'bg-[#262931]' : 'bg-slate-200'}`}><UserCircle className="w-8 h-8 text-slate-400 dark:text-slate-500" /></span>
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex justify-between items-baseline mb-1">
-                        <h3 className={`font-semibold text-sm truncate pr-2 ${theme === 'dark' ? 'text-slate-200' : 'text-slate-800'}`}>{chat.displayName || resolveName(statusSenderOf(chat.id) || chat.id)}</h3>
+                        <h3 className={`font-semibold text-sm truncate pr-2 ${theme === 'dark' ? 'text-slate-200' : 'text-slate-800'}`}>{chat.displayName && !chat.displayName.includes('@') ? chat.displayName : (resolveName(statusSenderOf(chat.id) || chat.id))}</h3>
                         <span className={`text-[10px] shrink-0 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
-                          {lastMsg?.timestamp ? new Date(lastMsg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (hasLive ? 'Live' : '')}
+                          {chat.isStatus ? (lastMsg?.timestamp ? new Date(lastMsg.timestamp * 1000).toLocaleTimeString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '') : (lastMsg?.timestamp ? new Date(lastMsg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (hasLive ? 'Live' : ''))}
                         </span>
                       </div>
                       <div className="flex items-center justify-between gap-2">
@@ -877,10 +1007,12 @@ export default function LiveInbox() {
               <button onClick={() => { setActiveChatId(null); setReplyTo(null); liveStream.setActiveChat(null); }} className="md:hidden p-2 -ml-3 mr-2 text-slate-500">
                 &larr;
               </button>
-              <div className={`w-9 h-9 rounded-full flex items-center justify-center mr-3 ${isStatusChat(activeChatId) ? (theme === 'dark' ? 'bg-emerald-500/10' : 'bg-emerald-100') : (theme === 'dark' ? 'bg-[#1e222b]' : 'bg-slate-100')}`}>
+              <div className={`w-9 h-9 rounded-full flex items-center justify-center mr-3 overflow-hidden shrink-0 ${isStatusChat(activeChatId) ? (theme === 'dark' ? 'bg-emerald-500/10' : 'bg-emerald-100') : (theme === 'dark' ? 'bg-[#1e222b]' : 'bg-slate-100')}`}>
                 {isStatusChat(activeChatId)
-                  ? <span className={`text-base ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>📷</span>
-                  : <UserCircle className={`w-6 h-6 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`} />}
+                  ? (avatars[statusSenderOf(activeChatId)]
+                    ? <img src={avatars[statusSenderOf(activeChatId)]} alt="" className="w-9 h-9 rounded-full object-cover" />
+                    : <span className={`text-base ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>📷</span>)
+                  : <ChatAvatar pic={avatars[activeChatId]} size={36} theme={theme} />}
               </div>
               <div className="min-w-0">
                 <h2 className={`font-bold text-lg truncate ${theme === 'dark' ? 'text-white' : 'text-slate-800'}`}>
