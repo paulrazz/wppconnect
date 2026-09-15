@@ -68,6 +68,51 @@ function hashKey(key) {
   return crypto.createHash('sha256').update(key || '').digest('hex').substring(0, 32);
 }
 
+// wppconnect fills chatId/from/to inconsistently across versions and message
+// shapes, and for GROUP chats the sender (participant) JID often leaks into
+// `from`. That mis-buckets a group message into a DM with the sender, and the
+// sidebar then shows that sender as the "chat". Derive the group JID from any
+// id field ending in @g.us and force a normalized chatId onto the message so
+// the socket stream, event ledger, inbox store and clients all agree on the
+// bucket - while keeping author/participant/pushName intact for attribution.
+function normalizeChatIdentity(message) {
+  if (!message || typeof message !== 'object') return message;
+  const idOf = (value) => typeof value === 'string' ? value : (value?._serialized || value?.id || '');
+  const candidates = [
+    idOf(message.chatId),
+    typeof message.to === 'string' ? message.to : idOf(message.to),
+    typeof message.from === 'string' ? message.from : idOf(message.from),
+    idOf(message.author || message.participant),
+    typeof message.chat === 'string' ? message.chat : idOf(message.chat),
+    typeof message.group === 'string' ? message.group : idOf(message.group),
+  ];
+  const groupJid = candidates.find(value => value && /@g\.us$/.test(value));
+  const isGroup = Boolean(groupJid || message.isGroupMsg === true || message.isGroup === true);
+  if (!isGroup) return message;
+  const chatId = groupJid
+    || idOf(message.chatId)
+    || (message.fromMe ? idOf(message.to) : idOf(message.from))
+    || '';
+  if (!chatId) return message;
+  const stringOrEmpty = (value) => typeof value === 'string' ? value.trim() : '';
+  const chatObj = message.chat && typeof message.chat === 'object' ? message.chat : null;
+  const groupName = chatObj?.groupMetadata?.subject
+    || chatObj?.name
+    || stringOrEmpty(message.groupMetadata?.subject)
+    || stringOrEmpty(message.subject)
+    || stringOrEmpty(message.chatName)
+    || '';
+  return { ...message, chatId: { _serialized: chatId }, isGroupMsg: true, isGroup: true, groupName };
+}
+
+// Status timestamps arrive as seconds; only a couple of wppconnect paths use
+// milliseconds. Normalize to whole seconds so the UI renders one format.
+function statusTimestamp(message) {
+  const n = Number(message?.timestamp ?? message?.t ?? 0);
+  if (!n) return Math.floor(Date.now() / 1000);
+  return n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
+}
+
 // Per-API-key runtime state. One of these exists for every key anyone has
 // ever touched (started/stopped/queried), but only `client` or `startPromise`
 // being set means a Chromium profile is actually held in RAM.
@@ -345,7 +390,11 @@ class WhatsAppService {
     // wppconnect `onMessage` listener filters out isSentByMe (listener.layer:
     // `if (msg.isSentByMe || msg.isStatusV3) return;`), which is exactly why
     // messages sent through the API used to never reach the live inbox.
-    client.onAnyMessage((message) => {
+    client.onAnyMessage((raw) => {
+      // Force a canonical chatId for group messages first, so every consumer
+      // below (media cache, inbox store, socket stream, ledger, automation)
+      // buckets and attributes the message identically.
+      const message = normalizeChatIdentity(raw);
       // Preserve media while it is still downloadable. WhatsApp can remove
       // the live message immediately when the sender chooses Delete for all.
       if (['image', 'video', 'gif', 'audio', 'ptt', 'sticker', 'document'].includes(String(message.type || '').toLowerCase())) {
@@ -353,12 +402,17 @@ class WhatsAppService {
       }
       if (message.isStatus || message.isStatusV3 || message.from === 'status@broadcast') {
         const senderId = message.author || message.from;
+        // Normalize the status timestamp to whole seconds once, up front, so
+        // the live socket, the in-memory cache, the ledger and every client
+        // all receive the same well-formed value (wppconnect mixes seconds and
+        // milliseconds across paths/versions).
+        const status = { ...message, timestamp: statusTimestamp(message) };
         session.statusCache[senderId] ||= [];
-        session.statusCache[senderId].push(message);
+        session.statusCache[senderId].push(status);
         session.statusCache[senderId] = session.statusCache[senderId].slice(-25);
-        eventStore.rememberStatus(message);
-        this.io?.to(`session_${session.apiKey}`).emit('new_status', message);
-        void webhooks.emit('status.received', message);
+        eventStore.rememberStatus(status);
+        this.io?.to(`session_${session.apiKey}`).emit('new_status', status);
+        void webhooks.emit('status.received', status);
         return;
       }
       if (message.fromMe || message.isSentByMe) {

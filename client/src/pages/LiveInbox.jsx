@@ -30,6 +30,38 @@ const dedupeKey = (m) => (msgId(m) || '').replace(/_out$/, '');
 const MEDIA_TYPES = ['image', 'video', 'gif', 'audio', 'ptt', 'sticker', 'document'];
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '😢', '🙏', '🎉'];
 
+// Status chats live in the sidebar as standalone entries keyed by the sender's
+// JID under a reserved prefix, so they can never collide with a real 1:1 chat
+// with the same person. Opening one renders the dedicated StatusViewer.
+const STATUS_PREFIX = 'status:';
+const statusChatId = (senderId) => `${STATUS_PREFIX}${senderId}`;
+const statusSenderOf = (chatId) => (typeof chatId === 'string' && chatId.startsWith(STATUS_PREFIX) ? chatId.slice(STATUS_PREFIX.length) : null);
+const isStatusChat = (chatId) => Boolean(statusSenderOf(chatId));
+
+// Status timestamps arrive in seconds (wppconnect) but a few paths leak
+// milliseconds. Normalize to whole seconds once so the sidebar + viewer render
+// one consistent "disappeared x ago" style time.
+const statusTime = (s) => {
+  const n = Number(s?.timestamp ?? s?.t ?? 0);
+  if (!n) return 0;
+  return n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
+};
+
+const STATUS_TYPE_LABELS = {
+  image: 'Photo', video: 'Video', gif: 'GIF', audio: 'Audio', ptt: 'Voice note',
+  sticker: 'Sticker', document: 'Document', location: 'Location', live_location: 'Live location',
+  vcard: 'Contact card', contact_card: 'Contact card', contacts_array: 'Contact cards',
+  chat: 'Text', text: 'Text',
+};
+
+const statusTypeLabel = (s) => {
+  if (s?.isDeleted || s?.isRevoked || String(s?.type || '').toLowerCase() === 'revoked') return 'Deleted';
+  const type = String(s?.type || 'chat').toLowerCase();
+  if (STATUS_TYPE_LABELS[type]) return STATUS_TYPE_LABELS[type];
+  if (type.startsWith('poll')) return 'Poll';
+  return type.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') || 'Status';
+};
+
 // The canonical (non "_out") id - matches what WhatsApp/our API emit reactions under.
 const canonicalId = (m) => (msgId(m) || '').replace(/_out$/, '');
 
@@ -72,7 +104,9 @@ function fetchMedia(id, apiKey) {
 }
 
 // Lazily fetches/downloads a message's media payload from the API (cached per message).
-function MediaContent({ message, apiKey, theme }) {
+// An optional `className` merges into each media element so the StatusViewer can
+// reuse the same loader while the `.status-content .message-*` CSS rules size it.
+function MediaContent({ message, apiKey, theme, className = '' }) {
   const [data, setData] = useState(null);
   const [unavailable, setUnavailable] = useState(false);
   const type = String(message.type || '').toLowerCase();
@@ -105,16 +139,16 @@ function MediaContent({ message, apiKey, theme }) {
   if (!data?.dataUrl) return <LoaderCircle className="w-4 h-4 animate-spin opacity-50" />;
 
   if (type === 'image' || type === 'gif') {
-    return <img src={data.dataUrl} alt={message.caption || 'Image'} className="max-h-64 rounded-lg" />;
+    return <img src={data.dataUrl} alt={message.caption || 'Image'} className={`${className} max-h-64 rounded-lg`} />;
   }
   if (type === 'video') {
-    return <video src={data.dataUrl} controls className="max-h-64 rounded-lg" />;
+    return <video src={data.dataUrl} controls className={`${className} max-h-64 rounded-lg`} />;
   }
   if (type === 'audio' || type === 'ptt') {
-    return <audio src={data.dataUrl} controls className="w-56" />;
+    return <audio src={data.dataUrl} controls className={`${className} w-56`} />;
   }
   if (type === 'sticker') {
-    return <img src={data.dataUrl} alt="Sticker" className="w-28 h-28" />;
+    return <img src={data.dataUrl} alt="Sticker" className={`${className} w-28 h-28`} />;
   }
   if (type === 'document') {
     const name = message.filename || message.fileName || 'document';
@@ -328,6 +362,70 @@ function ActiveChatMessages({ chatId, apiKey, theme, hasMore, loadingEarlier, on
   );
 }
 
+// A single status/story: media, caption/text, and the time + type footer.
+// Reuses the message text/media helpers and the sidebar CSS scaffold
+// (.status-content / .message-* / .status-meta) so statuses render like the
+// real WhatsApp story screen instead of chat bubbles.
+function StatusItem({ status, apiKey, theme }) {
+  const type = String(status.type || 'chat').toLowerCase();
+  const isMedia = MEDIA_TYPES.includes(type);
+  const textOnly = type === 'chat' || type === 'text' || type === 'revoked';
+  const caption = status.caption || status.text || '';
+  const text = safeMessageText(status);
+  const deleted = status.isDeleted || status.isRevoked || type === 'revoked';
+  const at = statusTime(status);
+
+  const meta = `${statusTypeLabel(status)}${deleted ? ' · deleted' : ''}${at ? ` · ${new Date(at * 1000).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}`;
+
+  return (
+    <section className="message-content-status">
+      {deleted && <p className="text-xs text-red-400/90 italic mb-2">🚫 This status was deleted by its author</p>}
+      {isMedia ? (
+        <MediaContent
+          message={status}
+          apiKey={apiKey}
+          theme={theme}
+          className={type === 'sticker' ? 'message-sticker' : type === 'video' || type === 'gif' ? 'message-video' : 'message-image'}
+        />
+      ) : null}
+      {!isMedia && textOnly && text ? <p className="message-text">{text}</p> : null}
+      {isMedia && caption ? <p className="message-caption">{caption}</p> : null}
+      {!isMedia && !textOnly && text ? <p className="message-text">{text}</p> : null}
+      <p className="status-meta">{meta}</p>
+    </section>
+  );
+}
+
+// The open status "chat": every story a contact posted, oldest → newest, with
+// robust caption / time / type rendering. Subscribes only to that sender's
+// bucket (bumpChat from liveStream) so a new status streams straight in.
+function StatusViewer({ senderId, apiKey, theme }) {
+  const version = useSyncExternalStore(
+    (cb) => liveStream.subscribeChat(senderId, cb),
+    () => liveStream.chatVersion(senderId)
+  );
+  void version;
+  const list = liveStream.getStatuses()[senderId] || [];
+
+  if (!list.length) {
+    return (
+      <div className={`flex-1 flex flex-col items-center justify-center text-center p-8 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+        <MessageSquare className="w-10 h-10 mb-3 opacity-40" />
+        <p className="text-sm font-medium">No statuses yet</p>
+        <p className="text-xs mt-1">New stories from this contact will appear here the moment they post.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`flex-1 overflow-y-auto ${theme === 'dark' ? 'bg-[#0a0c10]' : 'bg-black'} status-content`}>
+      {list.map((s, idx) => (
+        <StatusItem key={msgId(s) || `status-${idx}`} status={s} apiKey={apiKey} theme={theme} />
+      ))}
+    </div>
+  );
+}
+
 export default function LiveInbox() {
   const { theme } = useTheme();
   const navigate = useNavigate();
@@ -432,13 +530,40 @@ export default function LiveInbox() {
     }
   }, []);
 
+  // Seed the live status buckets from the server's status history (live
+  // WhatsApp story store + anything captured since the session started).
+  // Deduped server-side? No - dedup lives in seedStatuses, so re-running this
+  // (periodic refresh, opening a status chat) is always safe.
+  const loadStatusHistory = useCallback(async (key) => {
+    try {
+      const res = await axios.get(`${API_URL}/stories`, { headers: { 'x-api-key': key } });
+      const grouped = res.data;
+      if (!grouped || typeof grouped !== 'object') return;
+      for (const senderId of Object.keys(grouped)) {
+        const list = Array.isArray(grouped[senderId]) ? grouped[senderId] : [];
+        if (list.length) liveStream.seedStatuses(senderId, list);
+      }
+    } catch (err) {
+      console.error("Failed to load status history", err);
+    }
+  }, []);
+
   const loadLists = useCallback(async (key) => {
     if (listLoadedRef.current) return;
     listLoadedRef.current = true;
     setListsLoading(true);
-    await Promise.all([fetchChatList(key), fetchContacts(key)]);
+    await Promise.all([fetchChatList(key), fetchContacts(key), loadStatusHistory(key)]);
     setListsLoading(false);
-  }, [fetchChatList, fetchContacts]);
+  }, [fetchChatList, fetchContacts, loadStatusHistory]);
+
+  // Statuses expire and new ones appear while the page is open; the socket
+  // streams new ones, but this periodic refresh keeps history + deletions in
+  // sync without depending on the socket being connected.
+  useEffect(() => {
+    if (sessionStatus !== 'CONNECTED' || !apiKey) return undefined;
+    const timer = setInterval(() => { void loadStatusHistory(apiKey); }, 60000);
+    return () => clearInterval(timer);
+  }, [sessionStatus, apiKey, loadStatusHistory]);
 
   useEffect(() => {
     let cancelled = false;
@@ -462,7 +587,15 @@ export default function LiveInbox() {
 
   const openChat = (chatId) => {
     setActiveChatId(chatId);
+    setReplyTo(null);
     liveStream.setActiveChat(chatId);
+    if (isStatusChat(chatId)) {
+      // A status "chat" is the contact's story feed. If the live bucket is
+      // still empty on open, pull it from the server's status history.
+      const senderId = statusSenderOf(chatId);
+      if (!liveStream.getStatuses()[senderId]?.length) loadStatusHistory(apiKey);
+      return;
+    }
     // History on demand: if this chat has no live bucket yet, pull the newest
     // real messages so anything visible in the subtitle is also readable in the
     // box (in full, including deleted messages that WhatsApp still holds).
@@ -563,17 +696,35 @@ export default function LiveInbox() {
   };
 
   // Merge API chat list (with last-message subtitles) + live chats into one
-  // sorted sidebar. Memoized so pure local-state churn (typing in search,
-  // toggling a reply, sending) does not rebuild + sort the whole list every
-  // render; it recomputes on the live version bump and list/contact changes.
+  // sorted sidebar, then append a "status chat" per contact with stories so
+  // each shows up as its own standalone conversation. Memoized so pure
+  // local-state churn (typing in search, toggling a reply, sending) does not
+  // rebuild + sort the whole list every render; it recomputes on the live
+  // version bump and list/contact changes.
   const sidebar = useMemo(() => {
     const map = {};
-    apiChats.forEach(c => { map[c.id] = { ...c }; });
+    apiChats.forEach(c => { map[c.id] = { ...c, isStatus: false }; });
     Object.entries(liveChats).forEach(([chatId, { messages }]) => {
       const last = messages[messages.length - 1];
-      if (!map[chatId]) map[chatId] = { id: chatId, displayName: resolveName(chatId), lastMessage: null, contact: null };
+      if (!map[chatId]) map[chatId] = { id: chatId, displayName: resolveName(chatId), lastMessage: null, contact: null, isStatus: false };
       if (last) map[chatId] = { ...map[chatId], lastMessage: { ...last, timestamp: last.timestamp || 0 } };
     });
+    const allStatuses = liveStream.getStatuses();
+    for (const senderId of Object.keys(allStatuses)) {
+      const list = allStatuses[senderId] || [];
+      const newest = list[list.length - 1];
+      if (!newest) continue;
+      const contact = contacts[senderId] || {};
+      const senderInfo = newest.sender || {};
+      const displayName = contact.name || contact.pushname || senderInfo.name || senderInfo.formattedName || senderInfo.pushname || newest.notifyName || senderId.split('@')[0];
+      map[statusChatId(senderId)] = {
+        id: statusChatId(senderId),
+        displayName,
+        contact: null,
+        isStatus: true,
+        lastMessage: { ...newest, timestamp: statusTime(newest), previewText: messagePreview({ ...newest, timestamp: statusTime(newest) }) },
+      };
+    }
     return Object.values(map).sort((a, b) => (b.lastMessage?.timestamp || 0) - (a.lastMessage?.timestamp || 0));
   }, [apiChats, liveChats, liveVersion, contacts]);
 
@@ -668,37 +819,41 @@ export default function LiveInbox() {
             </div>
           ) : (
             sidebar.map(chat => {
-              const lastMsg = chat.lastMessage;
-              const preview = lastMsg?.previewText || messagePreview(lastMsg) || '';
-              const isActive = activeChatId === chat.id;
-              const hasLive = Boolean(liveChats[chat.id]?.messages?.length);
+                const lastMsg = chat.lastMessage;
+                const preview = lastMsg?.previewText || messagePreview(lastMsg) || '';
+                const isActive = activeChatId === chat.id;
+                const hasLive = Boolean(liveChats[chat.id]?.messages?.length);
 
-              return (
-                <button
-                  key={chat.id}
-                  onClick={() => openChat(chat.id)}
-                  className={`w-full flex items-center p-4 border-b text-left transition-colors ${theme === 'dark' ? 'border-[#1e222b]' : 'border-slate-100'} ${isActive ? (theme === 'dark' ? 'bg-[#1c2028]' : 'bg-indigo-50') : (theme === 'dark' ? 'hover:bg-[#16191f]' : 'hover:bg-slate-100')}`}
-                >
-                  <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 mr-4 ${theme === 'dark' ? 'bg-[#262931]' : 'bg-slate-200'}`}>
-                    <UserCircle className={`w-8 h-8 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex justify-between items-baseline mb-1">
-                      <h3 className={`font-semibold text-sm truncate pr-2 ${theme === 'dark' ? 'text-slate-200' : 'text-slate-800'}`}>{chat.displayName || resolveName(chat.id)}</h3>
-                      <span className={`text-[10px] shrink-0 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
-                        {lastMsg?.timestamp ? new Date(lastMsg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (hasLive ? 'Live' : '')}
-                      </span>
+                return (
+                  <button
+                    key={chat.id}
+                    onClick={() => openChat(chat.id)}
+                    className={`w-full flex items-center p-4 border-b text-left transition-colors ${theme === 'dark' ? 'border-[#1e222b]' : 'border-slate-100'} ${isActive ? (theme === 'dark' ? 'bg-[#1c2028]' : 'bg-indigo-50') : (theme === 'dark' ? 'hover:bg-[#16191f]' : 'hover:bg-slate-100')}`}
+                  >
+                    <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 mr-4 ${chat.isStatus ? (theme === 'dark' ? 'bg-emerald-500/10' : 'bg-emerald-100') : (theme === 'dark' ? 'bg-[#262931]' : 'bg-slate-200')}`}>
+                      {chat.isStatus
+                        ? <span className={`text-lg ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>📷</span>
+                        : <UserCircle className={`w-8 h-8 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`} />}
                     </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <p className={`text-xs truncate ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
-                        {lastMsg?.fromMe ? 'You: ' : ''}{preview || (hasLive ? 'Waiting for new messages...' : '')}
-                      </p>
-                      {hasLive && <span className={`text-[9px] shrink-0 font-bold uppercase tracking-wide ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-600'}`}>live</span>}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex justify-between items-baseline mb-1">
+                        <h3 className={`font-semibold text-sm truncate pr-2 ${theme === 'dark' ? 'text-slate-200' : 'text-slate-800'}`}>{chat.displayName || resolveName(statusSenderOf(chat.id) || chat.id)}</h3>
+                        <span className={`text-[10px] shrink-0 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+                          {lastMsg?.timestamp ? new Date(lastMsg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (hasLive ? 'Live' : '')}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className={`text-xs truncate ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
+                          {lastMsg?.fromMe && !chat.isStatus ? 'You: ' : ''}{chat.isStatus ? `Status · ${preview || 'New story'}` : (preview || (hasLive ? 'Waiting for new messages...' : ''))}
+                        </p>
+                        {chat.isStatus
+                          ? <span className={`text-[9px] shrink-0 font-bold uppercase tracking-wide ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>story</span>
+                          : (hasLive && <span className={`text-[9px] shrink-0 font-bold uppercase tracking-wide ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-600'}`}>live</span>)}
+                      </div>
                     </div>
-                  </div>
-                </button>
-              );
-            })
+                  </button>
+                );
+              })
           )}
         </div>
       </div>
@@ -722,41 +877,54 @@ export default function LiveInbox() {
               <button onClick={() => { setActiveChatId(null); setReplyTo(null); liveStream.setActiveChat(null); }} className="md:hidden p-2 -ml-3 mr-2 text-slate-500">
                 &larr;
               </button>
-              <div className={`w-9 h-9 rounded-full flex items-center justify-center mr-3 ${theme === 'dark' ? 'bg-[#1e222b]' : 'bg-slate-100'}`}>
-                <UserCircle className={`w-6 h-6 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`} />
+              <div className={`w-9 h-9 rounded-full flex items-center justify-center mr-3 ${isStatusChat(activeChatId) ? (theme === 'dark' ? 'bg-emerald-500/10' : 'bg-emerald-100') : (theme === 'dark' ? 'bg-[#1e222b]' : 'bg-slate-100')}`}>
+                {isStatusChat(activeChatId)
+                  ? <span className={`text-base ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>📷</span>
+                  : <UserCircle className={`w-6 h-6 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`} />}
               </div>
               <div className="min-w-0">
                 <h2 className={`font-bold text-lg truncate ${theme === 'dark' ? 'text-white' : 'text-slate-800'}`}>
-                  {resolveName(activeChatId)}
+                  {isStatusChat(activeChatId) ? (resolveName(statusSenderOf(activeChatId)) || 'Status') : resolveName(activeChatId)}
                 </h2>
-                <p className={`text-[10px] font-semibold uppercase tracking-wide ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-600'}`}>
-                  Saved · live
+                <p className={`text-[10px] font-semibold uppercase tracking-wide ${isStatusChat(activeChatId) ? (theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600') : (theme === 'dark' ? 'text-indigo-400' : 'text-indigo-600')}`}>
+                  {isStatusChat(activeChatId) ? 'Status updates' : 'Saved · live'}
                 </p>
               </div>
             </div>
 
-            {/* Chat Messages */}
-            <ActiveChatMessages
-              key={activeChatId}
-              chatId={activeChatId}
-              apiKey={apiKey}
-              theme={theme}
-              hasMore={Boolean(earlier[activeChatId]?.hasMore)}
-              loadingEarlier={loadingEarlier}
-              onLoadEarlier={loadEarlier}
-              onReply={setReplyTo}
-              onReact={sendReaction}
-            />
+            {/* Chat Messages / Status Viewer */}
+            {isStatusChat(activeChatId) ? (
+              <StatusViewer
+                key={activeChatId}
+                senderId={statusSenderOf(activeChatId)}
+                apiKey={apiKey}
+                theme={theme}
+              />
+            ) : (
+              <>
+                <ActiveChatMessages
+                  key={activeChatId}
+                  chatId={activeChatId}
+                  apiKey={apiKey}
+                  theme={theme}
+                  hasMore={Boolean(earlier[activeChatId]?.hasMore)}
+                  loadingEarlier={loadingEarlier}
+                  onLoadEarlier={loadEarlier}
+                  onReply={setReplyTo}
+                  onReact={sendReaction}
+                />
 
-            {/* Chat Input */}
-            <ChatInputForm
-              activeChatId={activeChatId}
-              apiKey={apiKey}
-              API_URL={API_URL}
-              onMessageSent={onMessageSent}
-              replyTo={replyTo}
-              onClearReply={() => setReplyTo(null)}
-            />
+                {/* Chat Input */}
+                <ChatInputForm
+                  activeChatId={activeChatId}
+                  apiKey={apiKey}
+                  API_URL={API_URL}
+                  onMessageSent={onMessageSent}
+                  replyTo={replyTo}
+                  onClearReply={() => setReplyTo(null)}
+                />
+              </>
+            )}
           </>
         )}
       </div>

@@ -27,6 +27,7 @@ function createLiveStream() {
 
   const listeners = new Set();    // global subscribers (whole-page / cross-chat UI)
   const chats = {};       // chatId -> { messages: [] }  (live messages only)
+  const statuses = {};    // senderId -> [status updates] (one "status chat" per sender)
   const reactions = {};   // msgId -> [{ emoji, senderId }]
   const automationEvents = []; // recent rule executions (ran / error)
 
@@ -89,6 +90,39 @@ const pushMessage = (message, targetId) => {
     return true;
   };
 
+  // Status updates arrive with `from` = "status@broadcast"; the person is the
+  // `author` (or the `sender` envelope). Bucket each status under that person's
+  // JID so every contact shows as its own standalone "status chat". Group
+  // messages never reach this path (they land in chats), so an @g.us here
+  // would mean a misbucketed story - guarded against.
+  const statusSenderId = (m) => {
+    const raw = m?.sender?.id?._serialized || m?.sender?.id || m?.author?._serialized || m?.author || m?.from;
+    const id = typeof raw === 'string' ? raw : '';
+    return id && !id.endsWith('@g.us') && id !== 'status@broadcast' ? id : '';
+  };
+
+  const pushStatus = (senderId, status) => {
+    if (!senderId || !status) return false;
+    if (!statuses[senderId]) statuses[senderId] = [];
+    const list = statuses[senderId];
+    const key = dedupeKey(status);
+    const existing = key ? list.find(s => dedupeKey(s) === key) : null;
+    if (isDeletedCopy(status)) {
+      if (existing) {
+        existing.isDeleted = true;
+        existing.isRevoked = true;
+        existing.deleted = true;
+        return false;
+      }
+    }
+    if (existing) return false;
+    list.push(normalizeOut(status));
+    // Newest story last, so the viewer reads oldest → newest and the sidebar
+    // "lastMessage" is the freshest status.
+    list.sort((a, b) => (a.timestamp || a.t || 0) - (b.timestamp || b.t || 0));
+    return true;
+  };
+
   const applySocketHandlers = () => {
     socket.on('new_message', (message) => {
       const chatId = chatIdOf(message);
@@ -144,6 +178,36 @@ const pushMessage = (message, targetId) => {
       }
       if (changedChats.length) {
         [...new Set(changedChats)].forEach(id => bumpChat(id));
+        notify();
+      }
+    });
+
+    socket.on('new_status', (status) => {
+      const senderId = statusSenderId(status);
+      if (pushStatus(senderId, status)) {
+        bumpChat(senderId); // re-render an open status chat
+        notify();           // refresh the sidebar (newest status moved it)
+      }
+    });
+
+    socket.on('status_deleted', (raw) => {
+      const d = raw?.data || raw;
+      const refRaw = d.referenceId || d.refId || d.msgId || d.id || d.original?.id;
+      const refId = (refRaw?._serialized || refRaw?.id || refRaw || '').replace(/_out$/, '');
+      if (!refId) return;
+      const changed = [];
+      for (const senderId of Object.keys(statuses)) {
+        for (const s of statuses[senderId]) {
+          if ((msgId(s) || '').replace(/_out$/, '') === refId && !s.isDeleted) {
+            s.isDeleted = true;
+            s.isRevoked = true;
+            s.deleted = true;
+            changed.push(senderId);
+          }
+        }
+      }
+      if (changed.length) {
+        [...new Set(changed)].forEach(id => bumpChat(id));
         notify();
       }
     });
@@ -211,6 +275,18 @@ const pushMessage = (message, targetId) => {
         notify();
       }
     },
+    seedStatuses: (senderId, list) => {
+      if (!senderId || !Array.isArray(list) || !list.length) return;
+      let changed = false;
+      for (const status of list) {
+        if (pushStatus(senderId, status)) changed = true;
+      }
+      if (changed) {
+        bumpChat(senderId);
+        notify();
+      }
+    },
+    getStatuses: () => statuses,
     subscribe: (fn) => {
       listeners.add(fn);
       return () => listeners.delete(fn);

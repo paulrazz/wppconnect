@@ -89,7 +89,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .story-nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 20; width: 46px; height: 46px; display: grid; place-items: center; color: white; background: rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.15); border-radius: 50%; }
 .story-nav:hover:not(:disabled) { background: rgba(0,168,132,.8); }
 .story-nav:disabled { opacity: .2; cursor: default; }
-.status-content { align-self: stretch; height: 100%; max-height: 100vh; min-height: 0; padding: 150px 48px 26px; display: flex; flex-direction: column; align-items: center; overflow-y: auto; scrollbar-gutter: stable; }
+.status-content { align-self: stretch; height: 100%; max-height: 100vh; min-height: 0; padding: 40px 48px 40px; display: flex; flex-direction: column; align-items: center; gap: 34px; overflow-y: auto; scrollbar-gutter: stable; }
 .status-content .message-content-status { width: 100%; min-height: min-content; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; }
 .status-content .message-text { width: min(900px, 100%); margin: 0 auto; color: white; font-size: clamp(16px, 1.45vw, 22px); line-height: 1.55; text-align: left; white-space: pre-wrap; }
 .status-content .message-caption { width: min(820px, 100%); max-height: 24vh; overflow-y: auto; margin: 14px auto 0; padding: 14px 16px; color: #e5e7eb; background: rgba(0,0,0,.32); border-radius: 9px; font-size: clamp(13px, 1vw, 16px); line-height: 1.5; text-align: left; white-space: pre-wrap; }

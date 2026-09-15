@@ -325,7 +325,16 @@ class InboxStore {
       await DB.run(`INSERT INTO inbox_messages (api_key, chat_id, msg_id, stored_at, body_text, message_json) VALUES (?,?,?,?,?,?)
         ON CONFLICT(api_key, chat_id, msg_id) DO UPDATE SET stored_at=excluded.stored_at, body_text=excluded.body_text, message_json=excluded.message_json`,
         [apiKey, chatId, saved.id, saved.storedAt, saved.bodyText, saved.json]);
-      await this.upsertChat(apiKey, chatId, message, message.notifyName || message.pushname || null);
+      // For group chats, nameHint is the GROUP subject (whatever the message
+      // carried) - never the sender's notifyName/pushname, or every incoming
+      // group message would rename the sidebar chat to the last person who
+      // spoke. When a group name is not available, leave the existing row
+      // (or the phone fallback) alone; bootstrap() heals real subjects.
+      const isGroupChat = /@g\.us$/.test(chatId);
+      const nameHint = isGroupChat
+        ? (typeof message?.groupName === 'string' && message.groupName ? message.groupName : null)
+        : (message?.notifyName || message?.pushname || null);
+      await this.upsertChat(apiKey, chatId, message, nameHint);
     } catch (error) {
       console.error('Inbox recordMessage failed:', error.message);
     }
