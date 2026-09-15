@@ -12,6 +12,13 @@ const automation = require('./automation.service');
 // bounded on Railway. Each running Chrome is roughly 200-400MB.
 const MAX_CONCURRENT_SESSIONS = Math.max(1, Number(process.env.MAX_CONCURRENT_SESSIONS || 2));
 
+function withTimeout(promise, ms) {
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms)),
+  ]);
+}
+
 function looksLikeBinaryPayload(value) {
   if (typeof value !== 'string') return false;
   const text = value.trim();
@@ -770,8 +777,53 @@ class WhatsAppService {
     }, { requestedId: chatId, loadEarlier });
   }
 
-  async sendFile(apiKey, to, dataUrl, filename, caption = '') { return this.requireClient(apiKey).sendFileFromBase64(await this.resolveDestination(apiKey, to), dataUrl, filename, caption); }
-  async sendSticker(apiKey, to, dataUrl) { return this.requireClient(apiKey).sendImageAsSticker(await this.resolveDestination(apiKey, to), dataUrl); }
+  async sendFile(apiKey, to, dataUrl, filename, caption = '') {
+    const client = this.requireClient(apiKey);
+    const resolvedTo = await this.resolveDestination(apiKey, to);
+    const result = await client.sendFileFromBase64(resolvedTo, dataUrl, filename, caption);
+    this.cacheSentMedia(client, resolvedTo, dataUrl, filename);
+    return result;
+  }
+  async sendSticker(apiKey, to, dataUrl) {
+    const client = this.requireClient(apiKey);
+    const resolvedTo = await this.resolveDestination(apiKey, to);
+    const result = await client.sendImageAsSticker(resolvedTo, dataUrl);
+    this.cacheSentMedia(client, resolvedTo, dataUrl, 'sticker.webp');
+    return result;
+  }
+
+  // The just-sent media is already in our hands as a dataUrl, so persist it to
+  // the media cache under the canonical message id before WhatsApp can prune
+  // it. Read-only on the page: just reflects back the newest sent message id.
+  cacheSentMedia(client, chatId, dataUrl, filename) {
+    void (async () => {
+      try {
+        let id = null;
+        for (let attempt = 0; attempt < 5 && !id; attempt++) {
+          id = await client.page.evaluate(async ({ chatId, fromMe }) => {
+            const store = globalThis.WPP?.whatsapp?.ChatStore;
+            let chat = store?.get(chatId);
+            if (!chat) chat = store?.getModelsArray?.().find(item => item.id?.toString?.() === chatId || item.id?._serialized === chatId);
+            const models = chat?.msgs?.getModelsArray?.() || [];
+            for (let i = models.length - 1; i >= 0; i--) {
+              const msg = models[i];
+              if (msg?.isSentByMe && globalThis.WAPI?.processMessageObj?.(msg, true, true)) {
+                const idField = globalThis.WAPI.processMessageObj(msg, true, true);
+                if (idField && typeof idField.id === 'string') return idField.id;
+              }
+            }
+            return null;
+          }, { chatId, fromMe: true });
+          if (!id) await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        if (id) eventStore.cacheMedia(id, dataUrl, { mimetype: this.dataUrlMime(dataUrl), filename });
+      } catch (_) {}
+    })();
+  }
+
+  dataUrlMime(dataUrl) {
+    try { return /^data:([^;,]+)/.exec(dataUrl)?.[1] || null; } catch (_) { return null; }
+  }
   async sendLocation(apiKey, to, latitude, longitude, title = '') { return this.requireClient(apiKey).sendLocation(await this.resolveDestination(apiKey, to), String(latitude), String(longitude), title); }
   async sendContact(apiKey, to, contactId, name) { return this.requireClient(apiKey).sendContactVcard(await this.resolveDestination(apiKey, to), await this.resolveDestination(apiKey, contactId), name); }
   async sendList(apiKey, to, options) { return this.requireClient(apiKey).sendListMessage(await this.resolveDestination(apiKey, to), options); }
@@ -787,32 +839,47 @@ class WhatsAppService {
 
   async downloadMedia(apiKey, messageId) {
     const client = this.requireClient(apiKey);
-    const cached = eventStore.getCachedMedia(messageId);
+    const shortKey = apiKey.slice(0, 8);
+    // Optimistic outgoing messages carry a "_out" suffix that never exists in
+    // WhatsApp's store. The canonical id (used by the event log and cache) is
+    // the same id without it.
+    const canonicalId = String(messageId).replace(/_out$/, '');
+    let cached;
+    try { cached = eventStore.getCachedMedia(canonicalId); } catch (e) {}
     if (cached?.dataUrl) return cached;
+    console.log('[media]', shortKey, 'cache miss for', canonicalId);
     // Revoked messages are often removed from WhatsApp's live store. Prefer
     // the in-process event cache when the native lookup throws, so recovered
     // deletions can still be opened while the media blob remains available.
     let message;
-    try { message = await client.getMessageById(messageId); } catch (error) {
-      message = eventStore.getMessage(messageId);
+    let nativeErr = null;
+    try { message = await withTimeout(client.getMessageById(canonicalId), 15000); } catch (error) {
+      nativeErr = error;
+      console.log('[media]', shortKey, 'getMessageById TIMED OUT OR THREW:', String(error?.message || error).slice(0, 120));
+      message = eventStore.getMessage(canonicalId);
       if (!message) {
+        console.log('[media]', shortKey, 'no event-store fallback; 410');
         const friendly = new Error('This deleted media is no longer available from WhatsApp');
         friendly.statusCode = 410;
         throw friendly;
       }
+      console.log('[media]', shortKey, 'serving from event-store fallback');
     }
     if (!message) {
+      console.log('[media]', shortKey, 'getMessageById empty; 404');
       const error = new Error('This deleted media is no longer available from WhatsApp');
       error.statusCode = 404;
       throw error;
     }
     let dataUrl;
-    try { dataUrl = await client.downloadMedia(message); } catch (_) {
+    try { dataUrl = await withTimeout(client.downloadMedia(message), 20000); } catch (err) {
+      console.log('[media]', shortKey, 'downloadMedia TIMED OUT OR THREW for', canonicalId, '->', String(err?.message || err).slice(0, 120), '| fromMe:', message?.fromMe, '| type:', message?.type, '| nativeErr:', nativeErr ? 'yes' : 'no');
       const error = new Error('This deleted media is no longer available from WhatsApp');
       error.statusCode = 410;
       throw error;
     }
     if (!dataUrl) {
+      console.log('[media]', shortKey, 'downloadMedia returned blank for', canonicalId);
       const error = new Error('Media is no longer available from WhatsApp');
       error.statusCode = 410;
       throw error;

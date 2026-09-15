@@ -45,7 +45,8 @@ function MediaContent({ message, apiKey, theme }) {
   useEffect(() => {
     let alive = true;
     setError(null);
-    axios.get(`${API_URL}/media/${encodeURIComponent(String(msgId(message)))}`, { headers: { 'x-api-key': apiKey } })
+    const id = (msgId(message) || '').replace(/_out$/, '');
+    axios.get(`${API_URL}/media/${encodeURIComponent(id)}`, { headers: { 'x-api-key': apiKey } })
       .then(res => { if (alive) setData(res.data); })
       .catch(err => { if (alive) setError(err?.response?.status || err?.message || 'error'); });
     return () => { alive = false; };
