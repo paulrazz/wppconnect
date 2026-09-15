@@ -1,5 +1,6 @@
 import { io } from 'socket.io-client';
 import { getApiKey } from './auth';
+import { sessionStore } from './sessionStore';
 
 const SERVER_URL = (import.meta.env.VITE_WPPCONNECT_URL || '').replace(/\/$/, '');
 
@@ -45,12 +46,25 @@ const normalizeOut = (m) => {
   return m;
 };
 
+const isDeletedCopy = (m) => Boolean(m?.isDeleted || m?.isRevoked || String(m?.type || '').toLowerCase() === 'revoked');
+
 const pushMessage = (message, targetId) => {
     if (!targetId) return false;
     if (!chats[targetId]) chats[targetId] = { messages: [] };
     const list = chats[targetId].messages;
     const key = dedupeKey(message);
-    if (key && list.some(m => dedupeKey(m) === key)) return false;
+    const existing = key ? list.find(m => dedupeKey(m) === key) : null;
+    if (isDeletedCopy(message)) {
+      // A revoke/delete echo is a stub that mirrors an earlier message. Flag the
+      // original bubble (keeping its text) instead of rendering a twin.
+      if (existing) {
+        existing.isDeleted = true;
+        existing.isRevoked = true;
+        existing.deleted = true;
+        return false;
+      }
+    }
+    if (existing) return false;
     list.push(normalizeOut(message));
     return true;
   };
@@ -87,6 +101,10 @@ const pushMessage = (message, targetId) => {
       reactions[targetId] = list;
       notify();
     });
+
+    socket.on('session_status', (status) => sessionStore.setStatus(status));
+    socket.on('session_details', (details) => sessionStore.setDetails(details));
+    socket.on('qr_code', (qrBase64) => sessionStore.setQr(qrBase64));
   };
 
   const connect = async (key) => {
@@ -94,6 +112,7 @@ const pushMessage = (message, targetId) => {
     disconnect();
     apiKey = key || null;
     if (!apiKey) return;
+    sessionStore.hydrate(apiKey);
     socket = io(SERVER_URL || window.location.origin, {
       auth: { apiKey },
       transports: ['websocket', 'polling'],
@@ -109,6 +128,7 @@ const pushMessage = (message, targetId) => {
     }
     apiKey = null;
     activeChatId = null;
+    sessionStore.clear();
   };
 
   // The full page (Dashboard, Developer, Inbox) stays live even when the

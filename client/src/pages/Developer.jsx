@@ -1,7 +1,8 @@
-import { useState, useEffect, memo } from 'react';
+import { useState, useEffect, memo, useSyncExternalStore } from 'react';
 import { useTheme } from '../ThemeContext';
 import axios from 'axios';
 import { getApiKey } from '../auth';
+import { sessionStore } from '../sessionStore';
 import { useNavigate } from 'react-router-dom';
 import { Code2, Copy, Lock, Check, Terminal, PlayCircle, LoaderCircle, Webhook, Activity, FileText, MessageSquare, Server, Image as ImageIcon, Users, Plus, Trash2, Globe } from 'lucide-react';
 import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -49,7 +50,6 @@ const CodeBlock = memo(({ language, code, theme }) => (
 
 export default function Developer() {
   const [apiKey, setApiKey] = useState('');
-  const [sessionStatus, setSessionStatus] = useState('LOADING');
   const [copied, setCopied] = useState('');
   const [activeLang, setActiveLang] = useState('curl');
   const { theme } = useTheme();
@@ -64,6 +64,15 @@ export default function Developer() {
   const [webhookBusy, setWebhookBusy] = useState(false);
   const [webhookMsg, setWebhookMsg] = useState(null);
   const navigate = useNavigate();
+
+  // Session status comes from the shared store (socket-fed + cached), so this
+  // page renders instantly instead of waiting on a status round-trip.
+  const sessionVersion = useSyncExternalStore(
+    (cb) => sessionStore.subscribe(cb),
+    () => sessionStore.version
+  );
+  void sessionVersion;
+  const sessionStatus = sessionStore.getState().status;
 
   useEffect(() => {
     if (activeSection !== 'webhooks' || !apiKey) return;
@@ -114,12 +123,7 @@ export default function Developer() {
   };
 
   useEffect(() => {
-    getApiKey().then(key => {
-      setApiKey(key);
-      axios.get(`${import.meta.env.VITE_WPPCONNECT_URL || ''}/api/status`, { headers: { 'x-api-key': key } })
-        .then(res => setSessionStatus(res.data.status))
-        .catch(() => setSessionStatus('DISCONNECTED'));
-    });
+    getApiKey().then(key => setApiKey(key));
   }, []);
 
   const copyToClipboard = (text, id) => {
@@ -213,15 +217,6 @@ export default function Developer() {
       payload: { groupName: "VIP Customers", participants: ["1234567890@c.us", "0987654321@c.us"] }
     }
   ];
-
-  if (sessionStatus === 'LOADING') {
-    return (
-      <div className={`flex-1 flex flex-col items-center justify-center ${theme === 'dark' ? 'bg-[#0a0c10] text-indigo-400' : 'bg-slate-50 text-indigo-600'}`}>
-        <LoaderCircle className="w-10 h-10 animate-spin mb-4" />
-        <span className="font-bold tracking-widest uppercase text-sm">Verifying Session...</span>
-      </div>
-    );
-  }
 
   if (sessionStatus !== 'CONNECTED') {
     return (

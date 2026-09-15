@@ -1,96 +1,77 @@
-import { useState, useEffect, useRef } from 'react';
-import { io } from 'socket.io-client';
+import { useState, useRef, useEffect, useSyncExternalStore } from 'react';
 import axios from 'axios';
 import { getApiKey } from '../auth';
-import { Smartphone, Activity, Server, Database, LoaderCircle, CheckCircle2, XCircle, Send, PlayCircle, StopCircle, Battery, BatteryCharging, MonitorSmartphone, Wifi, Cpu, ShieldCheck } from 'lucide-react';
+import { sessionStore } from '../sessionStore';
+import { Smartphone, Activity, Server, LoaderCircle, CheckCircle2, XCircle, Send, PlayCircle, StopCircle, Battery, MonitorSmartphone, Wifi, Cpu, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const SERVER_URL = (import.meta.env.VITE_WPPCONNECT_URL || '').replace(/\/$/, '');
 const API_URL = `${SERVER_URL}/api`;
 
 export default function Dashboard() {
-  const [sessionStatus, setSessionStatus] = useState('DISCONNECTED');
-  const [qrCode, setQrCode] = useState(null);
-  const [metrics, setMetrics] = useState({ ready: false, battery: null, platform: null, connected: false });
-  const [apiKey, setApiKey] = useState('');
+  // Session state lives in the shared store, fed by the always-on socket and
+  // cached in localStorage - so a reload renders the last known state
+  // instantly instead of flashing "disconnected" while the socket connects.
+  const sessionVersion = useSyncExternalStore(
+    (cb) => sessionStore.subscribe(cb),
+    () => sessionStore.version
+  );
+  void sessionVersion;
+  const sessionSnapshot = sessionStore.getState();
+  const sessionStatus = sessionSnapshot.status;
+  const qrCode = sessionSnapshot.qr;
+  const metrics = { ready: sessionSnapshot.details?.ready, ...(sessionSnapshot.details?.info || {}) };
   const autoStarted = useRef(false);
-  
+
   // Sandbox State
   const [sandboxTo, setSandboxTo] = useState('');
   const [sandboxText, setSandboxText] = useState('Hello from CommNexus Command Center!');
   const [sandboxResult, setSandboxResult] = useState(null);
   const [isSending, setIsSending] = useState(false);
 
+  // One-time reconcile with the authoritative REST state + auto-restore.
   useEffect(() => {
-    let socket;
+    let cancelled = false;
     getApiKey().then(key => {
-      setApiKey(key);
-      if (!key) return;
-      
-      axios.defaults.headers.common['x-api-key'] = key;
-      axios.get(`${API_URL}/status`).then(({ data }) => {
-        setSessionStatus(data.status);
-        setMetrics(m => ({ ...m, ready: data.ready, ...data.info }));
-        // Auto-restore: if a saved pairing exists, relaunching the browser will
-        // reconnect without asking for a new QR scan.
-        if (!autoStarted.current && data.status === 'DISCONNECTED') {
-          autoStarted.current = true;
-          setSessionStatus('STARTING');
-          axios.post(`${API_URL}/start-session`, {}, { headers: { 'x-api-key': key } })
-            .catch(() => setSessionStatus('DISCONNECTED'));
-        }
-      }).catch(() => setSessionStatus('OFFLINE'));
-
-      socket = io(SERVER_URL || window.location.origin, { 
-        auth: { apiKey: key }, 
-        extraHeaders: { 'x-api-key': key } 
-      });
-
-      socket.on('session_status', (status) => {
-        if (status === 'CONNECTED') {
-          setQrCode(null);
-          setSessionStatus('CONNECTED');
-          return;
-        }
-        // A downgrade (DISCONNECTED / QR_READY / STARTING) can arrive from a
-        // stale socket handshake right after reload. Confirm it against the
-        // authoritative REST status before flipping the UI away from a state
-        // we just verified, so the page can't flicker "connected -> not connected".
-        axios.get(`${API_URL}/status`, { headers: { 'x-api-key': key } })
-          .then(({ data }) => {
-            if (data.status === status) setSessionStatus(status);
-          })
-          .catch(() => setSessionStatus(status));
-      });
-
-      socket.on('session_details', (details) => {
-        setMetrics(m => ({ ...m, ready: details.ready, ...details.info }));
-      });
-
-      socket.on('qr_code', (qrBase64) => {
-        setQrCode(qrBase64);
-        setSessionStatus('QR_READY');
-      });
+      if (cancelled || !key) return;
+      axios.get(`${API_URL}/status`)
+        .then(({ data }) => {
+          if (cancelled) return;
+          sessionStore.setStatus(data.status);
+          sessionStore.setDetails(data);
+          // Auto-restore: if a saved pairing exists, relaunching the browser
+          // will reconnect without asking for a new QR scan.
+          if (!autoStarted.current && data.status === 'DISCONNECTED') {
+            autoStarted.current = true;
+            sessionStore.setStatus('STARTING');
+            axios.post(`${API_URL}/start-session`)
+              .catch(() => { if (sessionStore.getState().status === 'STARTING') sessionStore.setStatus('DISCONNECTED'); });
+          }
+        })
+        .catch(() => {
+          if (!cancelled && ['DISCONNECTED', 'STARTING'].includes(sessionStore.getState().status)) {
+            sessionStore.setStatus('OFFLINE');
+          }
+        });
     });
-
-    return () => socket && socket.disconnect();
+    return () => { cancelled = true; };
   }, []);
 
   const handleStartSession = async () => {
     try {
-      setSessionStatus('STARTING');
-      await axios.post(`${API_URL}/start-session`, {}, { headers: { 'x-api-key': apiKey } });
+      sessionStore.setStatus('STARTING');
+      await axios.post(`${API_URL}/start-session`);
     } catch (e) {
       console.error(e);
-      setSessionStatus('DISCONNECTED');
+      sessionStore.setStatus('DISCONNECTED');
     }
   };
 
   const handleStopSession = async () => {
     try {
-      await axios.post(`${API_URL}/stop-session`, {}, { headers: { 'x-api-key': apiKey } });
-      setSessionStatus('DISCONNECTED');
+      await axios.post(`${API_URL}/stop-session`);
     } catch (e) { console.error(e); }
+    sessionStore.setStatus('DISCONNECTED');
   };
 
   const handleSendTest = async (e) => {
@@ -225,9 +206,9 @@ export default function Dashboard() {
                     <p className="text-slate-500 dark:text-slate-400 max-w-sm mx-auto mb-8 text-sm">
                       Your WhatsApp session is currently offline. Click below to start the connection process.
                     </p>
-                    <button onClick={handleStartSession} disabled={sessionStatus === 'STARTING'} className="px-8 py-4 rounded-xl font-extrabold text-white bg-indigo-600 hover:bg-indigo-500 border border-indigo-500 shadow-lg shadow-indigo-500/20 transition-all flex items-center justify-center mx-auto disabled:opacity-50">
-                      {sessionStatus === 'STARTING' ? <LoaderCircle className="w-5 h-5 mr-3 animate-spin" /> : <PlayCircle className="w-5 h-5 mr-3" />}
-                      {sessionStatus === 'STARTING' ? 'CONNECTING...' : 'CONNECT DEVICE'}
+                    <button onClick={handleStartSession} disabled={sessionStatus === 'STARTING' || sessionStatus === 'OFFLINE'} className="px-8 py-4 rounded-xl font-extrabold text-white bg-indigo-600 hover:bg-indigo-500 border border-indigo-500 shadow-lg shadow-indigo-500/20 transition-all flex items-center justify-center mx-auto disabled:opacity-50">
+                      {sessionStatus === 'STARTING' || sessionStatus === 'OFFLINE' ? <LoaderCircle className="w-5 h-5 mr-3 animate-spin" /> : <PlayCircle className="w-5 h-5 mr-3" />}
+                      {sessionStatus === 'OFFLINE' ? 'RETRYING...' : sessionStatus === 'STARTING' ? 'CONNECTING...' : 'CONNECT DEVICE'}
                     </button>
                   </motion.div>
                 )}

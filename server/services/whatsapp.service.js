@@ -43,7 +43,7 @@ function messagePreview(message) {
   }[type];
   if (media) return text ? `${media}: ${text}` : media;
   if (type.includes('call')) return `${message.isMissed || type.includes('missed') ? 'Missed' : 'WhatsApp'} ${message.isVideoCall || type.includes('video') ? 'video' : 'voice'} call`;
-  if (type === 'revoked' || message.isDeleted || message.isRevoked) return '🚫 Message deleted';
+  if (type === 'revoked' || message.isDeleted || message.isRevoked) return text ? `${text} 🚫` : '🚫 Message deleted';
   if (type.startsWith('poll')) return `📊 ${message.pollName || message.poll?.name || text || 'Poll'}`;
   if (['buttons_response', 'list_response', 'template_button_reply', 'interactive_response'].includes(type)) return `↩️ ${text || 'Interactive response'}`;
   if (['buttons', 'template_button', 'interactive'].includes(type)) return `🔘 ${text || 'Interactive message'}`;
@@ -352,14 +352,14 @@ class WhatsAppService {
         // webhooks already record `message.sent` inside the send path, so we
         // only surface it on the socket here.
         const chatId = message.chatId?._serialized || message.chatId || message.to;
-        if (chatId) session.chatPreviewCache.set(chatId, message);
+        if (chatId) this.cachePreview(session, chatId, message);
         this.io?.to(`session_${session.apiKey}`).emit('new_message', message);
         return;
       }
       this.io?.to(`session_${session.apiKey}`).emit('new_message', message);
       eventStore.append('message.received', message);
       const chatId = message.chatId?._serialized || message.chatId || (message.fromMe ? message.to : message.from);
-      if (chatId) session.chatPreviewCache.set(chatId, message);
+      if (chatId) this.cachePreview(session, chatId, message);
       // Trigger automation rules (may send replies, templates, orders, etc.)
       void automation.handleIncomingMessage(message, session.apiKey, this);
       void webhooks.emit('message.received', message);
@@ -424,6 +424,21 @@ class WhatsAppService {
       if (state === 'CONNECTED') this.setStatus(session, 'CONNECTED');
       if (['UNPAIRED', 'UNPAIRED_IDLE', 'DISCONNECTED'].includes(state)) this.setStatus(session, 'DISCONNECTED');
     });
+  }
+
+  // Keep the "last message" preview pointed at real content. A revoked/deleted
+  // copy is just a stub, so never let it replace the preview; merge the stub's
+  // flag onto the previously cached (full) message instead.
+  cachePreview(session, chatId, message) {
+    const isDeletedCopy = Boolean(message.isDeleted || message.isRevoked || String(message.type || '').toLowerCase() === 'revoked');
+    if (isDeletedCopy) {
+      const original = (eventStore.idOf(message.id) && eventStore.getMessage(eventStore.idOf(message.id))) || session.chatPreviewCache.get(chatId);
+      if (original && original !== message) {
+        session.chatPreviewCache.set(chatId, { ...original, isDeleted: true, isRevoked: true, deleted: true });
+        return;
+      }
+    }
+    session.chatPreviewCache.set(chatId, message);
   }
 
   requireClient(apiKey) {
@@ -542,11 +557,17 @@ class WhatsAppService {
   }
 
   async getChats(apiKey, { offset = 0, limit = 30 } = {}) {
+    const safeOffset = Math.max(Number(offset) || 0, 0);
+    const safeLimit = Math.min(Math.max(Number(limit) || 30, 1), 100);
+    // Cheap TTL cache: the sidebar is refreshed by live events anyway, so a
+    // repeated /chats (page re-navigation, inbox re-open) returns instantly
+    // instead of round-tripping through WhatsApp each time.
+    const cacheKey = `${safeOffset}:${safeLimit}`;
+    const cached = this.chatsCache?.get(apiKey);
+    if (cached && cached.key === cacheKey && Date.now() - cached.at < 5000) return cached.value;
     const session = this.getSession(apiKey);
     const client = this.requireClient(apiKey);
     const allChats = (await client.listChats()).sort((a, b) => (b.t || 0) - (a.t || 0));
-    const safeOffset = Math.max(Number(offset) || 0, 0);
-    const safeLimit = Math.min(Math.max(Number(limit) || 30, 1), 100);
     const chats = allChats.slice(safeOffset, safeOffset + safeLimit);
     const livePreviews = await this.getChatPreviews(apiKey, chats.map(chat => chat.id?._serialized || chat.id));
     const enriched = await Promise.all(chats.map(async (chat) => {
@@ -563,17 +584,31 @@ class WhatsAppService {
       return {
         ...chat,
         displayName: displayName || contact.id?.user || chat.id?.user || 'Unknown contact',
-        lastMessage: lastMessage ? {
-          id: lastMessage.id,
-          body: compactPreview(safeMessageText(lastMessage)),
-          previewText: compactPreview(messagePreview(lastMessage)),
-          type: lastMessage.type || 'chat',
-          timestamp: lastMessage.timestamp || lastMessage.t || chat.t,
-          fromMe: Boolean(lastMessage.fromMe),
-        } : this.previewFromChatMetadata(chat),
+        lastMessage: (() => {
+          if (!lastMessage) return this.previewFromChatMetadata(chat);
+          // A deleted/revoked record is just a stub - WhatsApp clears the body
+          // but we logged the original when it arrived. Recover it so the
+          // subtitle keeps showing the real text (with a deleted marker)
+          // instead of silently becoming "Message deleted".
+          const isDel = Boolean(lastMessage.isDeleted || lastMessage.isRevoked || String(lastMessage.type || '').toLowerCase() === 'revoked');
+          const original = isDel && eventStore.idOf(lastMessage.id) ? eventStore.getMessage(eventStore.idOf(lastMessage.id)) : null;
+          const display = original || lastMessage;
+          return {
+            id: original?.id || lastMessage.id,
+            body: compactPreview(safeMessageText(display)),
+            previewText: compactPreview(messagePreview(display)),
+            type: display.type || lastMessage.type || 'chat',
+            timestamp: display.timestamp || display.t || lastMessage.timestamp || lastMessage.t || chat.t,
+            fromMe: Boolean(display.fromMe || lastMessage.fromMe),
+            deleted: isDel,
+          };
+        })(),
       };
     }));
-    return { items: enriched, total: allChats.length, offset: safeOffset, limit: safeLimit, hasMore: safeOffset + enriched.length < allChats.length };
+    const result = { items: enriched, total: allChats.length, offset: safeOffset, limit: safeLimit, hasMore: safeOffset + enriched.length < allChats.length };
+    this.chatsCache ??= new Map();
+    this.chatsCache.set(apiKey, { key: cacheKey, at: Date.now(), value: result });
+    return result;
   }
 
   previewFromChatMetadata(chat) {
@@ -636,6 +671,17 @@ class WhatsAppService {
     const limit = Math.min(Math.max(Number(count) || 30, 1), 100);
     let messages = await client.getMessages(chatId, { count: limit });
     if (!messages.length) messages = (await this.readChatModel(apiKey, chatId, false)).messages.slice(-limit);
+    // Deleted records from WhatsApp are stubs; swap in the logged original so
+    // the deleted message stays fully readable (tagged isDeleted for the UI).
+    messages = messages.map(message => {
+      if (!message) return message;
+      const del = Boolean(message.isDeleted || message.isRevoked || String(message.type || '').toLowerCase() === 'revoked');
+      if (del && !safeMessageText(message)) {
+        const original = eventStore.idOf(message.id) ? eventStore.getMessage(eventStore.idOf(message.id)) : null;
+        if (original) return { ...original, isDeleted: true, isRevoked: true, deleted: true };
+      }
+      return message;
+    });
     messages.forEach(message => eventStore.rememberMessage(message));
     return { messages, hasMore: messages.length >= limit, cursor: eventStore.idOf(messages[0]?.id) || null };
   }

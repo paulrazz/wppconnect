@@ -1,5 +1,6 @@
 import { useEffect, useState, lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import axios from 'axios';
 import { getApiKey } from './auth';
 import { LoaderCircle } from 'lucide-react';
 import Layout from './components/Layout';
@@ -41,6 +42,12 @@ function PrivateRoute({ children }) {
 }
 
 export default function App() {
+  // Set once globally so every page's API calls carry the key without each
+  // page re-hydrating it or showing a loader while it resolves.
+  useEffect(() => {
+    getApiKey().then(key => { if (key) axios.defaults.headers.common['x-api-key'] = key; });
+  }, []);
+
   return (
     <ThemeProvider>
       <BrowserRouter>
