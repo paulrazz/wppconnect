@@ -197,9 +197,16 @@ export default function LiveInbox() {
   const [activeChatId, setActiveChatId] = useState(null);
   const [replyTo, setReplyTo] = useState(null);
   const [listsLoading, setListsLoading] = useState(false);
+  const [inboxSince, setInboxSince] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [earlier, setEarlier] = useState({});
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const messagesEndRef = useRef(null);
   const loadingHistoryRef = useRef(null);
   const listLoadedRef = useRef(false);
+  const searchTimerRef = useRef(null);
 
   // Session status lives in the shared store (fed by the always-on socket and
   // cached in localStorage), so this page renders instantly on navigation.
@@ -235,19 +242,32 @@ export default function LiveInbox() {
     // Show the last known list immediately if it's recent enough, then refresh.
     const cached = readCachedChats(key);
     if (cached && cached.length) setApiChats(cached);
+    const mapChat = (c) => {
+      const rawId = c.id?._serialized || c.id;
+      const id = typeof rawId === 'string' ? rawId : String(rawId || '');
+      return {
+        id,
+        displayName: c.displayName || (id.split('@')[0] || id),
+        lastMessage: c.lastMessage || null,
+        contact: c.contact || null,
+      };
+    };
     try {
-      const res = await axios.get(`${API_URL}/chats`, { headers: { 'x-api-key': key } });
-      const list = Array.isArray(res.data.chats) ? res.data.chats : [];
-      const mapped = list.map(c => {
-        const rawId = c.id?._serialized || c.id;
-        const id = typeof rawId === 'string' ? rawId : String(rawId || '');
-        return {
-          id,
-          displayName: c.displayName || (id.split('@')[0] || id),
-          lastMessage: c.lastMessage || null,
-          contact: c.contact || null,
-        };
-      }).filter(c => c.id);
+      // The durable inbox is the source of truth: every chat recorded since the
+      // user first signed in, still available even if WhatsApp is disconnected.
+      const res = await axios.get(`${API_URL}/inbox`, { headers: { 'x-api-key': key } });
+      const inboxChats = Array.isArray(res.data?.chats) ? res.data.chats : [];
+      if (res.data?.startedAt) setInboxSince(res.data.startedAt);
+      if (inboxChats.length) {
+        const mapped = inboxChats.map(mapChat).filter(c => c.id);
+        setApiChats(mapped);
+        try { localStorage.setItem(CHATS_CACHE_KEY(key), JSON.stringify({ chats: mapped, at: Date.now() })); } catch (_) {}
+        return;
+      }
+      // Brand-new key: fall back to WhatsApp's live list so the sidebar isn't
+      // blank before the first baseline snapshot lands.
+      const live = await axios.get(`${API_URL}/chats`, { headers: { 'x-api-key': key } });
+      const mapped = (Array.isArray(live.data?.chats) ? live.data.chats : []).map(mapChat).filter(c => c.id);
       setApiChats(mapped);
       try { localStorage.setItem(CHATS_CACHE_KEY(key), JSON.stringify({ chats: mapped, at: Date.now() })); } catch (_) {}
     } catch (err) {
@@ -311,37 +331,28 @@ export default function LiveInbox() {
     if (loadingHistoryRef.current === chatId) return;
     loadingHistoryRef.current = chatId;
     try {
-      const res = await axios.get(`${API_URL}/messages/${encodeURIComponent(chatId)}?count=30`, { headers: { 'x-api-key': apiKey } });
-      liveStream.seedMessages(chatId, Array.isArray(res.data?.messages) ? res.data.messages : []);
-      // If WhatsApp has fully scrubbed the chat (e.g. "delete for me"), keep the
-      // subtitle message readable anyway - it's always somewhere on screen.
-      const bucketHas = liveStream.getChats()[chatId]?.messages?.length;
-      if (!bucketHas) {
-        const preview = apiChats.find(c => c.id === chatId)?.lastMessage;
-        if (preview) {
-          liveStream.seedMessages(chatId, [{
-            id: preview.id,
-            body: preview.previewText || preview.body || '',
-            type: preview.type || 'chat',
-            timestamp: preview.timestamp || Math.floor(Date.now() / 1000),
-            fromMe: Boolean(preview.fromMe),
-          }]);
-        }
-      }
-      // A deleted message is served by WhatsApp as a stub; the server recovers
-      // the original text into the subtitle. Mirror that text into the box
-      // (tagged deleted) so the deleted message stays fully readable there too.
-      const sidebarPreview = apiChats.find(c => c.id === chatId)?.lastMessage;
-      if (sidebarPreview?.deleted && sidebarPreview.previewText) {
+      // Durable history since sign-in (no pre-login backfill, no WhatsApp
+      // round-trip). It already carries deleted originals + reactions.
+      const res = await axios.get(`${API_URL}/inbox/${encodeURIComponent(chatId)}/messages?count=50`, { headers: { 'x-api-key': apiKey } });
+      const stored = Array.isArray(res.data?.messages) ? res.data.messages : [];
+      liveStream.seedMessages(chatId, stored);
+      setEarlier(prev => ({ ...prev, [chatId]: { cursor: res.data?.cursor || null, hasMore: Boolean(res.data?.hasMore) } }));
+      if (stored.length) return;
+      // Nothing recorded for this chat yet - surface the sidebar preview so the
+      // message visible in the subtitle is readable here too (incl. the
+      // recovered text of a deleted message).
+      const preview = apiChats.find(c => c.id === chatId)?.lastMessage;
+      if (preview?.previewText || preview?.body) {
         liveStream.seedMessages(chatId, [{
-          id: sidebarPreview.id,
-          body: sidebarPreview.previewText || sidebarPreview.body || '',
-          type: sidebarPreview.type || 'chat',
-          timestamp: sidebarPreview.timestamp || Math.floor(Date.now() / 1000),
-          fromMe: Boolean(sidebarPreview.fromMe),
-          isDeleted: true,
-          isRevoked: true,
-          deleted: true,
+          id: preview.id,
+          body: preview.previewText || preview.body || '',
+          previewText: preview.previewText || preview.body || '',
+          type: preview.type || 'chat',
+          timestamp: preview.timestamp || Math.floor(Date.now() / 1000),
+          fromMe: Boolean(preview.fromMe),
+          isDeleted: Boolean(preview.deleted),
+          isRevoked: Boolean(preview.deleted),
+          deleted: Boolean(preview.deleted),
         }]);
       }
     } catch (err) {
@@ -350,6 +361,39 @@ export default function LiveInbox() {
       loadingHistoryRef.current = null;
     }
   };
+
+  const loadEarlier = async (chatId) => {
+    const state = earlier[chatId];
+    if (!state?.hasMore || !state.cursor || loadingEarlier) return;
+    setLoadingEarlier(true);
+    try {
+      const res = await axios.get(`${API_URL}/inbox/${encodeURIComponent(chatId)}/messages?count=50&before=${encodeURIComponent(state.cursor)}`, { headers: { 'x-api-key': apiKey } });
+      const older = Array.isArray(res.data?.messages) ? res.data.messages : [];
+      liveStream.seedMessages(chatId, older);
+      setEarlier(prev => ({ ...prev, [chatId]: { cursor: res.data?.cursor || null, hasMore: Boolean(res.data?.hasMore) } }));
+    } catch (err) {
+      console.error("Failed to load earlier messages", err);
+    } finally {
+      setLoadingEarlier(false);
+    }
+  };
+
+  const runSearch = useCallback((key, query) => {
+    clearTimeout(searchTimerRef.current);
+    if (!query || !query.trim()) { setSearchResults([]); setSearching(false); return; }
+    setSearching(true);
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await axios.get(`${API_URL}/inbox/search?q=${encodeURIComponent(query.trim())}`, { headers: { 'x-api-key': key } });
+        setSearchResults(Array.isArray(res.data?.results) ? res.data.results : []);
+      } catch (err) {
+        console.error("Search failed", err);
+        setSearchResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 250);
+  }, []);
 
   const onMessageSent = useCallback((sentMsg) => {
     liveStream.addSentMessage(activeChatId, sentMsg);
@@ -417,18 +461,46 @@ export default function LiveInbox() {
 
         {/* Header */}
         <div className={`h-16 flex items-center px-4 shrink-0 border-b ${theme === 'dark' ? 'border-[#1e222b]' : 'border-slate-200'}`}>
-          <h2 className={`text-lg font-bold ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>Live Inbox</h2>
-          <span className="ml-auto text-xs font-semibold bg-indigo-500/10 text-indigo-500 px-2 py-1 rounded-full border border-indigo-500/20">
+          <div className="min-w-0">
+            <h2 className={`text-lg font-bold leading-tight ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>Live Inbox</h2>
+            <p className={`text-[10px] font-medium truncate ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+              {inboxSince ? `Saved since ${new Date(inboxSince).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}` : 'Your saved inbox'}
+            </p>
+          </div>
+          <span className="ml-auto text-xs font-semibold bg-indigo-500/10 text-indigo-500 px-2 py-1 rounded-full border border-indigo-500/20 shrink-0">
             {sidebar.length} chats
           </span>
         </div>
 
         {/* Search */}
-        <div className={`p-4 border-b ${theme === 'dark' ? 'border-[#1e222b]' : 'border-slate-200'}`}>
+        <div className={`p-4 border-b ${theme === 'dark' ? 'border-[#1e222b]' : 'border-slate-200'} relative`}>
           <div className="relative">
             <Search className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`} />
-            <input type="text" placeholder="Search conversations..." className={`w-full pl-9 pr-4 py-2 rounded-lg text-sm border focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all ${theme === 'dark' ? 'bg-[#16191f] border-[#1e222b] text-slate-200 placeholder-slate-500' : 'bg-white border-slate-300 text-slate-700 placeholder-slate-400'}`} />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => { setSearchQuery(e.target.value); runSearch(apiKey, e.target.value); }}
+              placeholder="Search your inbox..."
+              className={`w-full pl-9 pr-4 py-2 rounded-lg text-sm border focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all ${theme === 'dark' ? 'bg-[#16191f] border-[#1e222b] text-slate-200 placeholder-slate-500' : 'bg-white border-slate-300 text-slate-700 placeholder-slate-400'}`}
+            />
+            {searching && <LoaderCircle className="w-4 h-4 animate-spin absolute right-3 top-1/2 -translate-y-1/2 text-indigo-400" />}
           </div>
+          {searchQuery.trim() && !searching && (
+            <div className={`mt-2 max-h-72 overflow-y-auto rounded-lg border shadow-xl ${theme === 'dark' ? 'bg-[#12151a] border-[#262931]' : 'bg-white border-slate-200'}`}>
+              {searchResults.length === 0 ? (
+                <p className={`px-3 py-3 text-xs ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>No messages match “{searchQuery.trim()}”.</p>
+              ) : searchResults.map((r, i) => (
+                <button
+                  key={`${r.chatId}-${r.message?.id || i}`}
+                  onClick={() => { openChat(r.chatId); setSearchQuery(''); setSearchResults([]); }}
+                  className={`w-full text-left px-3 py-2 border-b last:border-0 ${theme === 'dark' ? 'border-[#1e222b] hover:bg-[#1c2028]' : 'border-slate-100 hover:bg-slate-50'}`}
+                >
+                  <p className={`text-xs font-semibold truncate ${theme === 'dark' ? 'text-slate-200' : 'text-slate-700'}`}>{r.displayName}</p>
+                  <p className={`text-xs truncate ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>{r.message?.previewText || r.message?.body}</p>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* List */}
@@ -443,8 +515,8 @@ export default function LiveInbox() {
               ) : (
                 <>
                   <MessageSquare className={`w-12 h-12 mb-4 opacity-50 ${theme === 'dark' ? 'text-slate-600' : 'text-slate-300'}`} />
-                  <p className={`text-sm font-medium ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Waiting for new messages...</p>
-                  <p className={`text-xs mt-2 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>Historic chats are hidden to preserve privacy.</p>
+                  <p className={`text-sm font-medium ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>No chats recorded yet</p>
+                  <p className={`text-xs mt-2 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>Conversations will appear here permanently once your device starts receiving messages.</p>
                 </>
               )}
             </div>
@@ -495,7 +567,7 @@ export default function LiveInbox() {
             </div>
             <h2 className={`text-2xl font-bold mb-2 ${theme === 'dark' ? 'text-white' : 'text-slate-800'}`}>CommNexus Live Inbox</h2>
             <p className={`max-w-md text-sm ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
-              Select a conversation to start streaming live incoming and outgoing messages.
+              Every conversation is saved the moment your device connects. Pick one to keep streaming it live.
             </p>
           </div>
         ) : (
@@ -513,7 +585,7 @@ export default function LiveInbox() {
                   {resolveName(activeChatId)}
                 </h2>
                 <p className={`text-[10px] font-semibold uppercase tracking-wide ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-600'}`}>
-                  Live streaming
+                  Saved · live
                 </p>
               </div>
             </div>
@@ -523,21 +595,37 @@ export default function LiveInbox() {
               {!activeChatData || activeChatData.messages.length === 0 ? (
                 <div className={`flex-1 flex flex-col items-center justify-center text-center p-8 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
                   <MessageSquare className="w-10 h-10 mb-3 opacity-40" />
-                  <p className="text-sm font-medium">No messages here yet</p>
-                  <p className="text-xs mt-1">New messages and the latest conversation history will appear here as they're available.</p>
+                  <p className="text-sm font-medium">No messages recorded yet</p>
+                  <p className="text-xs mt-1">Messages will appear here permanently once your device starts receiving.</p>
                 </div>
               ) : (
-                activeChatData.messages.map((msg, idx) => (
-                  <MessageBubble
-                    key={msgId(msg) || idx}
-                    message={msg}
-                    theme={theme}
-                    apiKey={apiKey}
-                    reactions={liveReactions[canonicalId(msg)] || []}
-                    onReply={(m) => setReplyTo(m)}
-                    onReact={sendReaction}
-                  />
-                ))
+                <>
+                  {earlier[activeChatId]?.hasMore && (
+                    <button
+                      onClick={() => loadEarlier(activeChatId)}
+                      disabled={loadingEarlier}
+                      className={`self-center text-xs font-semibold px-3 py-1.5 rounded-full border transition ${loadingEarlier ? 'opacity-50 cursor-not-allowed' : 'hover:bg-indigo-50'} ${theme === 'dark' ? 'text-indigo-400 border-indigo-500/30' : 'text-indigo-600 border-indigo-300'}`}
+                    >
+                      {loadingEarlier ? 'Loading...' : 'Load earlier messages'}
+                    </button>
+                  )}
+                  {activeChatData.messages.map((msg, idx) => {
+                    const live = liveReactions[canonicalId(msg)] || [];
+                    const stored = msg._reactions || [];
+                    const mergedReactions = [...live, ...stored.filter(s => !live.some(l => l.senderId === s.senderId && l.emoji === s.emoji))];
+                    return (
+                      <MessageBubble
+                        key={msgId(msg) || idx}
+                        message={msg}
+                        theme={theme}
+                        apiKey={apiKey}
+                        reactions={mergedReactions}
+                        onReply={(m) => setReplyTo(m)}
+                        onReact={sendReaction}
+                      />
+                    );
+                  })}
+                </>
               )}
               <div ref={messagesEndRef} />
             </div>

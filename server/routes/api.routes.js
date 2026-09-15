@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const whatsappService = require('../services/whatsapp.service');
+const inboxStore = require('../services/inbox-store.service');
 
 // Start the WhatsApp session
 router.post('/start-session', async (req, res) => {
@@ -51,6 +52,24 @@ router.post('/reset-session', async (req, res) => {
 // Get session status
 router.get('/status', (req, res) => {
   res.json(whatsappService.getStatus(res.locals.apiKey));
+});
+
+// Durable per-tenant inbox: the chat list recorded from the moment the user
+// first signed in, readable without an active WhatsApp connection.
+router.get('/inbox', (req, res) => {
+  res.json(inboxStore.getChats(res.locals.apiKey));
+});
+
+router.get('/inbox/search', (req, res) => {
+  res.json({ results: inboxStore.search(res.locals.apiKey, req.query.q, req.query.limit) });
+});
+
+// Messages persisted for a chat since the user signed in (paginated by
+// "before" cursor). Lives entirely on disk - no WhatsApp round-trip.
+router.get('/inbox/:chatId/messages', (req, res) => {
+  let chatId;
+  try { chatId = decodeURIComponent(req.params.chatId); } catch (_) { chatId = req.params.chatId; }
+  res.json(inboxStore.getMessages(res.locals.apiKey, chatId, req.query));
 });
 
 // Send a message (optionally as a quote/reply to another message)

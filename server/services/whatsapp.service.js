@@ -5,6 +5,7 @@ const wppconnect = require('@wppconnect-team/wppconnect');
 const puppeteer = require('puppeteer');
 const webhooks = require('./webhook.service');
 const eventStore = require('./event-store.service');
+const inboxStore = require('./inbox-store.service');
 const automation = require('./automation.service');
 
 // One isolated Chromium instance per API key, capped so total RAM stays
@@ -134,6 +135,13 @@ class WhatsAppService {
     if (status !== 'QR_READY') session.lastQrCode = null;
     if (status === 'CONNECTED') session.connectedAt = new Date().toISOString();
     if (status === 'CONNECTED') void this.refreshDeviceInfo(session);
+    // The first time a key reaches CONNECTED on this process, snapshot its chat
+    // list into the durable per-tenant inbox (summaries only - never the
+    // pre-login history). From that instant every message is recorded.
+    if (status === 'CONNECTED' && !session.inboxBooted) {
+      session.inboxBooted = true;
+      void this.bootstrapInbox(session);
+    }
 
     if (session.apiKey) {
       const room = `session_${session.apiKey}`;
@@ -350,9 +358,10 @@ class WhatsAppService {
         // Outgoing message (sent from the API or any frontend). Stream it in
         // real time so an open Live Inbox mirrors the account. eventStore and
         // webhooks already record `message.sent` inside the send path, so we
-        // only surface it on the socket here.
+        // only persist + surface it here.
         const chatId = message.chatId?._serialized || message.chatId || message.to;
         if (chatId) this.cachePreview(session, chatId, message);
+        if (chatId) inboxStore.recordMessage(session.apiKey, chatId, message);
         this.io?.to(`session_${session.apiKey}`).emit('new_message', message);
         return;
       }
@@ -360,6 +369,7 @@ class WhatsAppService {
       eventStore.append('message.received', message);
       const chatId = message.chatId?._serialized || message.chatId || (message.fromMe ? message.to : message.from);
       if (chatId) this.cachePreview(session, chatId, message);
+      if (chatId) inboxStore.recordMessage(session.apiKey, chatId, message);
       // Trigger automation rules (may send replies, templates, orders, etc.)
       void automation.handleIncomingMessage(message, session.apiKey, this);
       void webhooks.emit('message.received', message);
@@ -386,11 +396,16 @@ class WhatsAppService {
       }
       if (original && (original.type === 'revoked' || (!original.body && !original.content && !original.caption && !original.filename && !original.mimetype))) original = null;
       const deletion = eventStore.append('message.deleted', { ...data, referenceId: eventStore.idOf(referenceId), original, recoveryStatus: original ? 'recovered' : 'not-observed', deletedAt: new Date().toISOString() });
+      const delChatId = (original?.chatId?._serialized) || original?.chatId || deletion.data?.chatId?._serialized || deletion.data?.chatId || deletion.data?.from || null;
+      if (delChatId && String(delChatId) !== 'status@broadcast') inboxStore.recordDelete(session.apiKey, delChatId, deletion);
       this.io?.to(`session_${session.apiKey}`).emit('message_deleted', deletion);
       void webhooks.emit('message.deleted', deletion);
     });
     client.onMessageEdit((data) => {
       const edit = eventStore.append('message.edited', data);
+      const editedRef = eventStore.getMessage(data?.id);
+      const editChatId = editedRef?.chatId?._serialized || editedRef?.chatId || editedRef?.from || editedRef?.to || null;
+      if (editChatId) inboxStore.recordEdit(session.apiKey, editChatId, edit);
       this.io?.to(`session_${session.apiKey}`).emit('message_edited', edit);
       void webhooks.emit('message.edited', edit);
     });
@@ -409,6 +424,9 @@ class WhatsAppService {
         sender,
       });
       this.io?.to(`session_${session.apiKey}`).emit('message_reaction', reaction);
+      const reactedRef = eventStore.getMessage(probe);
+      const reactionChatId = reactedRef?.chatId?._serialized || reactedRef?.chatId || reactedRef?.from || reactedRef?.to || null;
+      if (reactionChatId) inboxStore.recordReaction(session.apiKey, reactionChatId, reaction.data);
       void webhooks.emit('message.reaction', reaction);
     });
     client.onIncomingCall((data) => {
@@ -449,6 +467,18 @@ class WhatsAppService {
       throw error;
     }
     return session.client;
+  }
+
+  async bootstrapInbox(session) {
+    try {
+      const client = session.client;
+      if (!client || !(await client.isLoggedIn())) return;
+      const chats = await client.listChats();
+      await inboxStore.bootstrap(session.apiKey, chats);
+      console.log(`Inbox baseline captured for ${session.apiKey.slice(0, 8)} (${chats.length} chats)`);
+    } catch (error) {
+      console.warn('Inbox baseline capture failed:', error.message);
+    }
   }
 
   async stopSession(apiKey) {
@@ -545,6 +575,7 @@ class WhatsAppService {
       }, { chatId: String(to), content: text, sendOptions: options || {} });
       eventStore.append('message.sent', result);
       session.chatPreviewCache.set(to, result);
+      inboxStore.recordMessage(session.apiKey, String(to), result);
       return result;
     }
     const resolvedTo = await this.resolveDestination(apiKey, to);
@@ -553,6 +584,7 @@ class WhatsAppService {
     const result = await this.requireClient(apiKey).sendText(resolvedTo, text, { ...options, markIsRead: false });
     eventStore.append('message.sent', result);
     session.chatPreviewCache.set(to, result);
+    inboxStore.recordMessage(session.apiKey, String(resolvedTo), result);
     return result;
   }
 
