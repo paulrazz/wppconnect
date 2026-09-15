@@ -12,6 +12,9 @@ class EventStore {
     this.persistedMessageIds = new Set();
     fs.mkdirSync(this.directory, { recursive: true });
     fs.mkdirSync(this.mediaDirectory, { recursive: true });
+    // Serialized async write chain: the ledger is appended in strict call
+    // order, but no hot path ever blocks on the (network-attached) disk.
+    this.writeChain = Promise.resolve();
     this.hydrateCache();
   }
 
@@ -90,7 +93,13 @@ class EventStore {
       return value;
     }));
     const entry = { ledgerId: crypto.randomUUID(), type, recordedAt: new Date().toISOString(), data: safeData };
-    fs.appendFileSync(this.file, `${JSON.stringify(entry)}\n`);
+    // Async append through the ordered chain: never block the Node event loop
+    // on a (volumes-backed) disk flush under load. The memory caches below are
+    // the read path and stay correct regardless; the chain guarantees the file
+    // is still a literal, in-order log. Failures are logged, not thrown.
+    this.writeChain = this.writeChain
+      .then(() => fs.promises.appendFile(this.file, `${JSON.stringify(entry)}\n`))
+      .catch(err => console.error('Event ledger write failed:', err));
     const id = this.idOf(safeData?.id);
     if (id && ['message.received', 'message.sent', 'message.snapshot', 'status.received', 'status.snapshot'].includes(type)) {
       this.indexMessage(safeData);

@@ -231,6 +231,103 @@ function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReac
   );
 }
 
+// The open conversation's message list - isolated in its own component that
+// subscribes ONLY to THIS chat's version. A message arriving in any other chat
+// bumps the global version (the sidebar needs it to refresh previews/sort) but
+// never re-renders this list. The parent passes stable props (setReplyTo is a
+// React setter, sendReaction/loadEarlier are useCallbacks) so React bails out
+// of re-rendering the whole pod tree on unrelated parent renders.
+function ActiveChatMessages({ chatId, apiKey, theme, hasMore, loadingEarlier, onLoadEarlier, onReply, onReact }) {
+  const chatVersion = useSyncExternalStore(
+    (cb) => liveStream.subscribeChat(chatId, cb),
+    () => liveStream.chatVersion(chatId)
+  );
+  void chatVersion;
+  const messages = liveStream.getChats()[chatId]?.messages || [];
+  const liveReactions = liveStream.getReactions();
+
+  const scrollBoxRef = useRef(null);
+  const messagesEndRef = useRef(null);
+  const nearBottomRef = useRef(true);
+  const lastMsgIdRef = useRef({});   // chatId -> newest live message id seen
+  const lastSmoothAtRef = useRef(0); // debounce competing smooth-scroll calls
+
+  // Track whether the user is reading near the latest message. When they have
+  // scrolled up to read history, new messages must never yank them back down.
+  const handleScroll = () => {
+    const el = scrollBoxRef.current;
+    if (!el) return;
+    nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  };
+
+  // Jump to the latest message whenever this chat is (re)opened. The parent
+  // keys the component by chatId, so this mounts fresh per chat switch.
+  useEffect(() => {
+    lastMsgIdRef.current[chatId] = null;
+    nearBottomRef.current = true;
+    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+  }, [chatId]);
+
+  // Follow new messages while the user is near the bottom. Comparing the
+  // newest message id - not length - means loading earlier history (which
+  // prepends) and reaction/delete updates never trigger a jump. A burst of
+  // messages coalesces: the first gets a smooth animation, subsequent ones
+  // snap instantly (behavior 'auto') so overlapping smooth-scroll animations
+  // never fight each other in the browser.
+  useEffect(() => {
+    const newest = messages[messages.length - 1];
+    const newestId = newest ? msgId(newest) : null;
+    const previous = lastMsgIdRef.current[chatId] ?? null;
+    lastMsgIdRef.current[chatId] = newestId ?? previous;
+    if (!newestId || newestId === previous || !nearBottomRef.current) return;
+    const now = Date.now();
+    const behavior = now - lastSmoothAtRef.current > 300 ? 'smooth' : 'auto';
+    lastSmoothAtRef.current = now;
+    messagesEndRef.current?.scrollIntoView({ behavior });
+  }, [chatVersion, chatId, messages]);
+
+  if (!messages.length) {
+    return (
+      <div className={`flex-1 flex flex-col items-center justify-center text-center p-8 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+        <MessageSquare className="w-10 h-10 mb-3 opacity-40" />
+        <p className="text-sm font-medium">No messages recorded yet</p>
+        <p className="text-xs mt-1">Messages will appear here permanently once your device starts receiving.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={scrollBoxRef} onScroll={handleScroll} className={`flex-1 overflow-y-auto p-6 flex flex-col gap-4 ${theme === 'dark' ? 'bg-[#0a0c10]' : 'bg-slate-50'}`}>
+      {hasMore && (
+        <button
+          onClick={() => onLoadEarlier(chatId)}
+          disabled={loadingEarlier}
+          className={`self-center text-xs font-semibold px-3 py-1.5 rounded-full border transition ${loadingEarlier ? 'opacity-50 cursor-not-allowed' : 'hover:bg-indigo-50'} ${theme === 'dark' ? 'text-indigo-400 border-indigo-500/30' : 'text-indigo-600 border-indigo-300'}`}
+        >
+          {loadingEarlier ? 'Loading...' : 'Load earlier messages'}
+        </button>
+      )}
+      {messages.map((msg, idx) => {
+        const live = liveReactions[canonicalId(msg)] || [];
+        const stored = msg._reactions || [];
+        const merged = [...live, ...stored.filter(s => !live.some(l => l.senderId === s.senderId && l.emoji === s.emoji))];
+        return (
+          <MessageBubble
+            key={msgId(msg) || idx}
+            message={msg}
+            theme={theme}
+            apiKey={apiKey}
+            reactions={merged}
+            onReply={onReply}
+            onReact={onReact}
+          />
+        );
+      })}
+      <div ref={messagesEndRef} />
+    </div>
+  );
+}
+
 export default function LiveInbox() {
   const { theme } = useTheme();
   const navigate = useNavigate();
@@ -247,10 +344,6 @@ export default function LiveInbox() {
   const [searching, setSearching] = useState(false);
   const [earlier, setEarlier] = useState({});
   const [loadingEarlier, setLoadingEarlier] = useState(false);
-  const messagesEndRef = useRef(null);
-  const scrollBoxRef = useRef(null);
-  const nearBottomRef = useRef(true);
-  const lastMsgIdRef = useRef({}); // chatId -> newest live message id seen
   const loadingHistoryRef = useRef(null);
   const listLoadedRef = useRef(false);
   const searchTimerRef = useRef(null);
@@ -272,7 +365,6 @@ export default function LiveInbox() {
   );
   void liveVersion;
   const liveChats = liveStream.getChats();
-  const liveReactions = liveStream.getReactions();
 
   const CHATS_CACHE_KEY = (key) => `wpp.chats.${key}`;
   const readCachedChats = (key) => {
@@ -368,39 +460,6 @@ export default function LiveInbox() {
   // route back to their canonical chatId bucket.
   useEffect(() => () => liveStream.setActiveChat(null), []);
 
-  // Track whether the user is reading near the latest message. When they have
-  // scrolled up to read history, new messages must never yank them back down.
-  const handleMessagesScroll = () => {
-    const el = scrollBoxRef.current;
-    if (!el) return;
-    nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-  };
-
-  // Jump to the latest message when a chat is opened (or re-opened).
-  useEffect(() => {
-    if (!activeChatId) return;
-    lastMsgIdRef.current[activeChatId] = null;
-    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
-    nearBottomRef.current = true;
-  }, [activeChatId]);
-
-  // Follow new messages ONLY for the chat currently in view, and only while
-  // the user is already near the bottom. A message landing in any other chat
-  // (which today bumps the same global liveVersion) must not scroll this chat.
-  // Comparing the newest message id - not length - also means loading earlier
-  // history (which prepends) and reaction/delete updates never trigger a jump.
-  useEffect(() => {
-    if (!activeChatId) return;
-    const messages = liveChats[activeChatId]?.messages;
-    const newest = messages?.[messages.length - 1];
-    const newestId = newest ? msgId(newest) : null;
-    const previous = lastMsgIdRef.current[activeChatId] ?? null;
-    lastMsgIdRef.current[activeChatId] = newestId ?? previous;
-    if (newestId && newestId !== previous && nearBottomRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [liveVersion, activeChatId, liveChats]);
-
   const openChat = (chatId) => {
     setActiveChatId(chatId);
     liveStream.setActiveChat(chatId);
@@ -448,7 +507,7 @@ export default function LiveInbox() {
     }
   };
 
-  const loadEarlier = async (chatId) => {
+  const loadEarlier = useCallback(async (chatId) => {
     const state = earlier[chatId];
     if (!state?.hasMore || !state.cursor || loadingEarlier) return;
     setLoadingEarlier(true);
@@ -462,7 +521,7 @@ export default function LiveInbox() {
     } finally {
       setLoadingEarlier(false);
     }
-  };
+  }, [earlier, loadingEarlier, apiKey]);
 
   const runSearch = useCallback((key, query) => {
     clearTimeout(searchTimerRef.current);
@@ -539,8 +598,6 @@ export default function LiveInbox() {
       </div>
     );
   }
-
-  const activeChatData = activeChatId ? liveChats[activeChatId] : null;
 
   return (
     <div className={`flex-1 flex overflow-hidden ${theme === 'dark' ? 'bg-[#0a0c10]' : 'bg-white'}`}>
@@ -679,44 +736,17 @@ export default function LiveInbox() {
             </div>
 
             {/* Chat Messages */}
-            <div ref={scrollBoxRef} onScroll={handleMessagesScroll} className={`flex-1 overflow-y-auto p-6 flex flex-col gap-4 ${theme === 'dark' ? 'bg-[#0a0c10]' : 'bg-slate-50'}`}>
-              {!activeChatData || activeChatData.messages.length === 0 ? (
-                <div className={`flex-1 flex flex-col items-center justify-center text-center p-8 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
-                  <MessageSquare className="w-10 h-10 mb-3 opacity-40" />
-                  <p className="text-sm font-medium">No messages recorded yet</p>
-                  <p className="text-xs mt-1">Messages will appear here permanently once your device starts receiving.</p>
-                </div>
-              ) : (
-                <>
-                  {earlier[activeChatId]?.hasMore && (
-                    <button
-                      onClick={() => loadEarlier(activeChatId)}
-                      disabled={loadingEarlier}
-                      className={`self-center text-xs font-semibold px-3 py-1.5 rounded-full border transition ${loadingEarlier ? 'opacity-50 cursor-not-allowed' : 'hover:bg-indigo-50'} ${theme === 'dark' ? 'text-indigo-400 border-indigo-500/30' : 'text-indigo-600 border-indigo-300'}`}
-                    >
-                      {loadingEarlier ? 'Loading...' : 'Load earlier messages'}
-                    </button>
-                  )}
-                  {activeChatData.messages.map((msg, idx) => {
-                    const live = liveReactions[canonicalId(msg)] || [];
-                    const stored = msg._reactions || [];
-                    const mergedReactions = [...live, ...stored.filter(s => !live.some(l => l.senderId === s.senderId && l.emoji === s.emoji))];
-                    return (
-                      <MessageBubble
-                        key={msgId(msg) || idx}
-                        message={msg}
-                        theme={theme}
-                        apiKey={apiKey}
-                        reactions={mergedReactions}
-                        onReply={(m) => setReplyTo(m)}
-                        onReact={sendReaction}
-                      />
-                    );
-                  })}
-                </>
-              )}
-              <div ref={messagesEndRef} />
-            </div>
+            <ActiveChatMessages
+              key={activeChatId}
+              chatId={activeChatId}
+              apiKey={apiKey}
+              theme={theme}
+              hasMore={Boolean(earlier[activeChatId]?.hasMore)}
+              loadingEarlier={loadingEarlier}
+              onLoadEarlier={loadEarlier}
+              onReply={setReplyTo}
+              onReact={sendReaction}
+            />
 
             {/* Chat Input */}
             <ChatInputForm

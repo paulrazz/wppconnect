@@ -25,14 +25,33 @@ function createLiveStream() {
   let activeChatId = null;
   let version = 0;
 
-  const listeners = new Set();
+  const listeners = new Set();    // global subscribers (whole-page / cross-chat UI)
   const chats = {};       // chatId -> { messages: [] }  (live messages only)
   const reactions = {};   // msgId -> [{ emoji, senderId }]
   const automationEvents = []; // recent rule executions (ran / error)
 
+  // Per-chat version counters + subscribers. The open conversation subscribes
+  // to its OWN chat's version so a message landing in any OTHER chat (which
+  // still bumps the global version for the sidebar) never re-renders the open
+  // message list. This is what separates the "these specific bubbles changed"
+  // signal from the "the sidebar previews may have changed" signal.
+  const chatVersions = {};   // chatId -> int
+  const chatListeners = new Map(); // chatId -> Set<fn>
+
+  // Global notify: something, somewhere, changed (sidebar previews, automation
+  // events, lists). Cheap; consumers opt in by reading store getters.
   const notify = () => {
     version += 1;
     listeners.forEach(fn => { try { fn(); } catch (_) {} });
+  };
+
+  // Per-chat notify: only this chat's data changed. Fires ONLY that chat's
+  // subscribers - no global version bump, no whole-page render.
+  const bumpChat = (id) => {
+    if (!id || typeof id !== 'string') return;
+    chatVersions[id] = (chatVersions[id] || 0) + 1;
+    const set = chatListeners.get(id);
+    if (set) set.forEach(fn => { try { fn(); } catch (_) {} });
   };
 
   // Reactions, media lookups and dedupe all assume a canonical (non "_out")
@@ -74,15 +93,16 @@ const pushMessage = (message, targetId) => {
     socket.on('new_message', (message) => {
       const chatId = chatIdOf(message);
       if (!chatId) return;
-      let changed = false;
+      const touched = [];
       if (isSelfMessage(message) && activeChatId && activeChatId !== chatId) {
         // A self-send can surface under the LID form while the sidebar uses
         // the PN form. Land it in the chat the user actually has open too.
-        changed = pushMessage(message, activeChatId) || changed;
+        if (pushMessage(message, activeChatId)) touched.push(activeChatId);
       } else {
-        changed = pushMessage(message, chatId) || changed;
+        if (pushMessage(message, chatId)) touched.push(chatId);
       }
-      if (changed) notify();
+      touched.forEach(id => bumpChat(id));
+      if (touched.length) notify();
     });
 
     socket.on('message_reaction', (raw) => {
@@ -102,6 +122,7 @@ const pushMessage = (message, targetId) => {
         list.push({ emoji: data.reactionText, senderId: sender });
       }
       reactions[targetId] = list;
+      bumpChat(activeChatId);
       notify();
     });
 
@@ -110,18 +131,21 @@ const pushMessage = (message, targetId) => {
       const refRaw = d.referenceId || d.refId || d.msgId || d.id || d.original?.id;
       const refId = (refRaw?._serialized || refRaw?.id || refRaw || '').replace(/_out$/, '');
       if (!refId) return;
-      let changed = false;
+      const changedChats = [];
       for (const chatId of Object.keys(chats)) {
         for (const m of chats[chatId].messages) {
           if ((msgId(m) || '').replace(/_out$/, '') === refId && !m.isDeleted) {
             m.isDeleted = true;
             m.isRevoked = true;
             m.deleted = true;
-            changed = true;
+            changedChats.push(chatId);
           }
         }
       }
-      if (changed) notify();
+      if (changedChats.length) {
+        [...new Set(changedChats)].forEach(id => bumpChat(id));
+        notify();
+      }
     });
 
     socket.on('session_status', (status) => sessionStore.setStatus(status));
@@ -168,7 +192,7 @@ const pushMessage = (message, targetId) => {
     disconnect,
     setActiveChat: (chatId) => { activeChatId = chatId || null; },
     addSentMessage: (chatId, sentMsg) => {
-      if (pushMessage(sentMsg, chatId)) notify();
+      if (pushMessage(sentMsg, chatId)) { bumpChat(chatId); notify(); }
     },
     seedMessages: (chatId, messages) => {
       if (!chatId || !Array.isArray(messages) || !messages.length) return;
@@ -183,6 +207,7 @@ const pushMessage = (message, targetId) => {
       }
       if (changed) {
         list.sort((a, b) => (a.timestamp || a.t || 0) - (b.timestamp || b.t || 0));
+        bumpChat(chatId);
         notify();
       }
     },
@@ -190,6 +215,19 @@ const pushMessage = (message, targetId) => {
       listeners.add(fn);
       return () => listeners.delete(fn);
     },
+    // Per-chat subscription: only re-render when THIS chat's data changes.
+    // Used by the open message list to avoid re-rendering on every incoming
+    // message globally (the sidebar still uses the global version to refresh
+    // previews and sort order).
+    subscribeChat: (chatId, fn) => {
+      if (!chatListeners.has(chatId)) chatListeners.set(chatId, new Set());
+      chatListeners.get(chatId).add(fn);
+      return () => {
+        const set = chatListeners.get(chatId);
+        if (set) { set.delete(fn); if (!set.size) chatListeners.delete(chatId); }
+      };
+    },
+    chatVersion: (chatId) => chatVersions[chatId] || 0,
     get version() { return version; },
     getChats: () => chats,
     getReactions: () => reactions,
