@@ -1,26 +1,21 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const DB = require('../lib/db');
 
-// The durable, per-tenant inbox. Once a user signs in we snapshot their chat
-// list (summaries only, never their pre-login history) and then permanently
-// record every message that flows while the session is live. Because the data
-// lives on disk (Railway volume), the inbox survives restarts, redeploys, and
-// even a disconnected WhatsApp session - the next time they open the dashboard
-// they see everything their account has done since the very first login.
+// The durable, per-tenant inbox. Store it in the same SQLite database that
+// already holds auth/users so it inherits the persistent volume: once a user
+// signs in we snapshot their chat list (summaries only - never their pre-login
+// history) and permanently record every message/deletion/edit/reaction that
+// flows from that moment. The inbox survives restarts, redeploys, and even a
+// disconnected WhatsApp session - the next time they open the dashboard they
+// see everything their account has done since the very first login.
 //
-// Layout under <root>/data/inbox/<sha256(apiKey)>/
-//   meta.json                 - startedAt (first ever login), lastBootAt
-//   chats.json                - chatId -> { id, displayName, isGroup, lastMessage, updatedAt }
-//   messages/<enc(chatId)>.jsonl - append-only event log (message/delete/reaction/edit)
-
-function safeKey(apiKey) {
-  return crypto.createHash('sha256').update(String(apiKey || '')).digest('hex').substring(0, 32);
-}
-
-function chatFile(chatId) {
-  return `${encodeURIComponent(String(chatId || ''))}.jsonl`;
-}
+// Tables (all keyed by api_key):
+//   inbox_meta     - started_at (first ever login), last_boot_at
+//   inbox_chats    - chatId -> display name, last-message subtitle, updated_at
+//   inbox_messages - msgId -> full message (JSON) + body_text for search,
+//                    overlaid live with is_deleted / reactions / edited
 
 function looksLikeBinaryPayload(value) {
   if (typeof value !== 'string') return false;
@@ -59,6 +54,7 @@ function previewText(message, fallback = '') {
 }
 
 const ids = (id) => typeof id === 'string' ? id : (id?._serialized || id?.id || '');
+const canonical = (id) => String(ids(id) || '').replace(/_out$/, '');
 
 // wppconnect timestamps arrive in seconds, but chat-level `t`/`previewT` are
 // milliseconds. Normalize anything to whole seconds for the UI.
@@ -88,49 +84,173 @@ function cleanMessage(message) {
   return out;
 }
 
+function parseJson(value, fallback) {
+  try { return JSON.parse(value); } catch (_) { return fallback; }
+}
+
+function previewDto(message, fallbackT) {
+  if (!message) return {
+    id: null, body: '', previewText: '', type: 'activity', timestamp: toSeconds(fallbackT), fromMe: false, deleted: false,
+  };
+  const type = String(message.type || 'chat').toLowerCase();
+  return {
+    id: canonical(message.id),
+    body: safeText(message) || '',
+    previewText: previewText(message) || '',
+    type: type === 'revoked' ? 'revoked' : (type || 'chat'),
+    timestamp: toSeconds(message.timestamp || message.t || fallbackT),
+    fromMe: Boolean(message.fromMe || message.isSentByMe),
+    deleted: Boolean(message.isDeleted || message.isRevoked || type === 'revoked'),
+  };
+}
+
 class InboxStore {
   constructor() {
-    this.directory = path.resolve(__dirname, '..', 'data', 'inbox');
-    fs.mkdirSync(this.directory, { recursive: true });
+    this.readyPromise = this.ensureSchema().catch(error => {
+      console.error('Inbox schema init failed:', error.message);
+    });
+    this.readyPromise.then(() => this.migrateLegacy()).catch(() => {});
   }
 
-  dir(apiKey) { return path.join(this.directory, safeKey(apiKey)); }
-  metaPath(apiKey) { return path.join(this.dir(apiKey), 'meta.json'); }
-  chatsPath(apiKey) { return path.join(this.dir(apiKey), 'chats.json'); }
-  messagesPath(apiKey, chatId) { return path.join(this.dir(apiKey), 'messages', chatFile(chatId)); }
-
-  ensure(apiKey) {
-    const dir = this.dir(apiKey);
-    fs.mkdirSync(path.join(dir, 'messages'), { recursive: true });
-    return dir;
+  async ensureSchema() {
+    for (const statement of [
+      `CREATE TABLE IF NOT EXISTS inbox_meta (
+        api_key TEXT PRIMARY KEY,
+        started_at INTEGER NOT NULL,
+        last_boot_at INTEGER,
+        updated_at INTEGER NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS inbox_chats (
+        api_key TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        display_name TEXT NOT NULL DEFAULT '',
+        is_group INTEGER NOT NULL DEFAULT 0,
+        last_message_id TEXT,
+        last_preview TEXT NOT NULL DEFAULT '',
+        last_body TEXT NOT NULL DEFAULT '',
+        last_type TEXT NOT NULL DEFAULT 'chat',
+        last_ts INTEGER NOT NULL DEFAULT 0,
+        last_from_me INTEGER NOT NULL DEFAULT 0,
+        last_deleted INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (api_key, chat_id)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_inbox_chats_key ON inbox_chats (api_key, updated_at DESC)`,
+      `CREATE TABLE IF NOT EXISTS inbox_messages (
+        api_key TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        msg_id TEXT NOT NULL,
+        stored_at INTEGER NOT NULL,
+        body_text TEXT NOT NULL DEFAULT '',
+        message_json TEXT NOT NULL,
+        reactions TEXT NOT NULL DEFAULT '[]',
+        is_deleted INTEGER NOT NULL DEFAULT 0,
+        edited INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (api_key, chat_id, msg_id)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_inbox_msgs_key ON inbox_messages (api_key, chat_id, stored_at DESC)`,
+    ]) {
+      await DB.run(statement);
+    }
   }
 
-  readJson(file, fallback) {
-    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return fallback; }
+  // One-time import of data written by the earlier JSONL inbox layout, so
+  // nothing recorded so far is lost after this upgrade. Legacy folders are
+  // renamed out of the way once imported.
+  async migrateLegacy() {
+    const root = path.resolve(__dirname, '..', 'data', 'inbox');
+    let keys;
+    try { keys = fs.readdirSync(root); } catch (_) { return; }
+    for (const folder of keys) {
+      const dir = path.join(root, folder);
+      let stat;
+      try { stat = fs.statSync(dir); } catch (_) { continue; }
+      if (!stat.isDirectory() || folder.endsWith('.legacy')) continue;
+      try {
+        const metaPath = path.join(dir, 'meta.json');
+        const chatsPath = path.join(dir, 'chats.json');
+        const meta = parseJson(fs.readFileSync(metaPath, 'utf8'), {});
+        if (meta.apiKey) {
+          await DB.run(`INSERT INTO inbox_meta (api_key, started_at, last_boot_at, updated_at) VALUES (?,?,?,?)
+            ON CONFLICT(api_key) DO UPDATE SET updated_at=excluded.updated_at`,
+            [meta.apiKey, new Date(meta.startedAt || Date.now()).getTime(), Date.now(), Date.now()]);
+        }
+        const chats = parseJson(fs.readFileSync(chatsPath, 'utf8'), {});
+        for (const [chatId, chat] of Object.entries(chats)) {
+          await DB.run(`INSERT OR IGNORE INTO inbox_chats
+            (api_key, chat_id, display_name, is_group, last_message_id, last_preview, last_body, last_type, last_ts, last_from_me, last_deleted, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+            [meta.apiKey, chatId, chat.displayName || chatId.split('@')[0], chat.isGroup ? 1 : 0,
+             chat.lastMessage?.id || null, chat.lastMessage?.previewText || '', chat.lastMessage?.body || '', chat.lastMessage?.type || 'chat',
+             chat.lastMessage?.timestamp || 0, chat.lastMessage?.fromMe ? 1 : 0, chat.lastMessage?.deleted ? 1 : 0, chat.updatedAt || Date.now()]);
+        }
+        const messagesDir = path.join(dir, 'messages');
+        let files;
+        try { files = fs.readdirSync(messagesDir); } catch (_) { files = []; }
+        for (const file of files) {
+          if (!file.endsWith('.jsonl')) continue;
+          let chatId;
+          try { chatId = decodeURIComponent(file.replace(/\.jsonl$/, '')); } catch (_) { continue; }
+          let lines;
+          try { lines = fs.readFileSync(path.join(messagesDir, file), 'utf8').trim().split('\n').filter(Boolean); } catch (_) { continue; }
+          await DB.run('BEGIN');
+          try {
+            for (const line of lines) {
+              const entry = parseJson(line, null);
+              if (!entry) continue;
+              const storedAt = entry.storedAt || entry.seq || Date.now();
+              if (entry.kind === 'message') {
+                await DB.run(`INSERT OR IGNORE INTO inbox_messages
+                  (api_key, chat_id, msg_id, stored_at, body_text, message_json, reactions, is_deleted, edited)
+                  VALUES (?,?,?,?,?,?,?,?,?)`,
+                  [meta.apiKey, chatId, canonical(entry.data?.id), storedAt, safeText(entry.data), JSON.stringify(cleanMessage(entry.data) || {}), '[]', 0, 0]);
+              } else if (entry.kind === 'delete') {
+                const existing = await DB.get('SELECT message_json FROM inbox_messages WHERE api_key=? AND chat_id=? AND msg_id=?', [meta.apiKey, chatId, entry.refId]);
+                const msgJson = existing?.message_json || (entry.original ? JSON.stringify(cleanMessage(entry.original)) : JSON.stringify({ id: entry.refId, type: 'revoked' }));
+                await DB.run(`INSERT INTO inbox_messages (api_key, chat_id, msg_id, stored_at, body_text, message_json, reactions, is_deleted, edited)
+                  VALUES (?,?,?,?,?,?,?,1,0)
+                  ON CONFLICT(api_key, chat_id, msg_id) DO UPDATE SET is_deleted=1`,
+                  [meta.apiKey, chatId, entry.refId, storedAt, safeText(parseJson(msgJson, {})), msgJson, '[]']);
+              } else if (entry.kind === 'reaction') {
+                await DB.run(`UPDATE inbox_messages SET reactions=? WHERE api_key=? AND chat_id=? AND msg_id=?`,
+                  [JSON.stringify([{ emoji: entry.emoji, senderId: entry.senderId }]), meta.apiKey, chatId, entry.refId]);
+              } else if (entry.kind === 'edit') {
+                const existing = await DB.get('SELECT message_json FROM inbox_messages WHERE api_key=? AND chat_id=? AND msg_id=?', [meta.apiKey, chatId, entry.refId]);
+                if (existing) {
+                  const data = parseJson(existing.message_json, {});
+                  for (const field of ['text', 'body', 'content', 'caption']) {
+                    if (entry.data?.[field] != null) data[field] = entry.data[field];
+                  }
+                  await DB.run('UPDATE inbox_messages SET message_json=?, edited=1 WHERE api_key=? AND chat_id=? AND msg_id=?',
+                    [JSON.stringify(data), meta.apiKey, chatId, entry.refId]);
+                }
+              }
+            }
+            await DB.run('COMMIT');
+          } catch (transactionError) {
+            await DB.run('ROLLBACK').catch(() => {});
+            throw transactionError;
+          }
+        }
+        fs.renameSync(dir, `${dir}.legacy`);
+        console.log(`Inbox migrated to SQLite for key ${String(meta.apiKey).slice(0, 8)}…`);
+      } catch (error) {
+        console.warn('Inbox legacy migration skipped for a folder:', error.message);
+      }
+    }
   }
 
-  writeJson(file, value) {
-    const tmp = `${file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(value));
-    fs.renameSync(tmp, file);
-  }
-
-  getMeta(apiKey) {
-    return this.readJson(this.metaPath(apiKey), null);
-  }
-
-  getChatsData(apiKey) {
-    return this.readJson(this.chatsPath(apiKey), {});
-  }
-
-  setMeta(apiKey, patch) {
-    this.ensure(apiKey);
-    const meta = this.getMeta(apiKey) || {};
-    const merged = { ...meta, ...patch };
-    if (!merged.startedAt) merged.startedAt = new Date().toISOString();
-    merged.updatedAt = new Date().toISOString();
-    this.writeJson(this.metaPath(apiKey), merged);
-    return merged;
+  saveMessage(apiKey, chatId, message) {
+    const cleared = cleanMessage({ ...message, chatId: { _serialized: chatId } });
+    const id = canonical(cleared.id);
+    const ts = toSeconds(cleared.timestamp || cleared.t) || Math.floor(Date.now() / 1000);
+    return {
+      id,
+      storedAt: Date.now(),
+      bodyText: safeText(cleared),
+      json: JSON.stringify(cleared),
+      ts,
+    };
   }
 
   // Called once per process boot once the session is CONNECTED. Captures the
@@ -138,10 +258,12 @@ class InboxStore {
   // and marks the very first login as startedAt. Later boots refresh the
   // baseline without losing accumulated messages.
   async bootstrap(apiKey, chats = []) {
-    const meta = this.getMeta(apiKey);
-    this.setMeta(apiKey, { lastBootAt: new Date().toISOString() });
-    const data = this.getChatsData(apiKey);
-    let changed = false;
+    await this.readyPromise;
+    const meta = await DB.get('SELECT started_at FROM inbox_meta WHERE api_key=?', [apiKey]);
+    const startedAt = meta?.started_at || Date.now();
+    await DB.run(`INSERT INTO inbox_meta (api_key, started_at, last_boot_at, updated_at) VALUES (?,?,?,?)
+      ON CONFLICT(api_key) DO UPDATE SET last_boot_at=excluded.last_boot_at, updated_at=excluded.updated_at`,
+      [apiKey, startedAt, Date.now(), Date.now()]);
     for (const chat of chats) {
       const chatId = ids(chat.id);
       if (!chatId) continue;
@@ -152,213 +274,188 @@ class InboxStore {
       const displayName = isGroup
         ? (chat.name || chat.groupMetadata?.subject || chatId.split('@')[0])
         : (contact.name || contact.formattedName || contact.verifiedName || contact.pushname || contact.shortName || chat.name || chatId.split('@')[0]);
-      const previous = data[chatId];
-      if (previous) continue; // keep the live preview we recorded at message time
-      data[chatId] = {
-        id: chatId,
-        displayName,
-        isGroup,
-        lastMessage: this.previewDto(lastMessage, chat.t),
-        updatedAt: toSeconds(lastMessage?.timestamp || lastMessage?.t || chat.t) * 1000 || Date.now(),
-      };
-      changed = true;
+      const preview = previewDto(lastMessage, chat.t);
+      // INSERT OR IGNORE: a live-recorded chat row is never clobbered by the
+      // (older) baseline snapshot.
+      await DB.run(`INSERT OR IGNORE INTO inbox_chats
+        (api_key, chat_id, display_name, is_group, last_message_id, last_preview, last_body, last_type, last_ts, last_from_me, last_deleted, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [apiKey, chatId, displayName, isGroup ? 1 : 0, preview.id, preview.previewText, preview.body, preview.type, preview.timestamp, preview.fromMe ? 1 : 0, preview.deleted ? 1 : 0, Date.now()]);
     }
-    if (changed) this.writeJson(this.chatsPath(apiKey), data);
   }
 
-  previewDto(message, fallbackT) {
-    if (!message) return {
-      id: null, body: '', previewText: '', type: 'activity',
-      timestamp: toSeconds(fallbackT), fromMe: false,
-    };
-    const type = String(message.type || 'chat').toLowerCase();
-    return {
-      id: ids(message.id) || null,
-      body: safeText(message) || '',
-      previewText: previewText(message) || '',
-      type: type === 'revoked' ? 'revoked' : (type || 'chat'),
-      timestamp: toSeconds(message.timestamp || message.t || fallbackT),
-      fromMe: Boolean(message.fromMe || message.isSentByMe),
-      deleted: Boolean(message.isDeleted || message.isRevoked || type === 'revoked'),
-    };
+  async recordMessage(apiKey, chatId, message) {
+    await this.readyPromise;
+    try {
+      const saved = this.saveMessage(apiKey, chatId, message);
+      await DB.run(`INSERT INTO inbox_messages (api_key, chat_id, msg_id, stored_at, body_text, message_json) VALUES (?,?,?,?,?,?)
+        ON CONFLICT(api_key, chat_id, msg_id) DO UPDATE SET stored_at=excluded.stored_at, body_text=excluded.body_text, message_json=excluded.message_json`,
+        [apiKey, chatId, saved.id, saved.storedAt, saved.bodyText, saved.json]);
+      await this.upsertChat(apiKey, chatId, message, message.notifyName || message.pushname || null);
+    } catch (error) {
+      console.error('Inbox recordMessage failed:', error.message);
+    }
   }
 
-  upsertChat(apiKey, chatId, message, displayName = null) {
-    const data = this.getChatsData(apiKey);
-    const previous = data[chatId] || { id: chatId, displayName: displayName || chatId.split('@')[0], isGroup: String(chatId).endsWith('@g.us') };
+  async upsertChat(apiKey, chatId, message, nameHint) {
     const ts = toSeconds(message?.timestamp || message?.t) || Math.floor(Date.now() / 1000);
-    data[chatId] = {
-      id: chatId,
-      displayName: displayName || previous.displayName,
-      isGroup: previous.isGroup || String(chatId).endsWith('@g.us'),
-      lastMessage: this.previewDto(message, ts),
-      updatedAt: ts * 1000,
-    };
-    this.writeJson(this.chatsPath(apiKey), data);
+    const preview = previewDto({ ...message, timestamp: ts }, ts);
+    const existing = await DB.get('SELECT display_name, is_group FROM inbox_chats WHERE api_key=? AND chat_id=?', [apiKey, chatId]);
+    const displayName = nameHint || existing?.display_name || chatId.split('@')[0];
+    const isGroup = existing?.is_group ? 1 : (String(chatId).endsWith('@g.us') ? 1 : 0);
+    await DB.run(`INSERT INTO inbox_chats
+      (api_key, chat_id, display_name, is_group, last_message_id, last_preview, last_body, last_type, last_ts, last_from_me, last_deleted, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(api_key, chat_id) DO UPDATE SET
+        last_message_id=excluded.last_message_id, last_preview=excluded.last_preview, last_body=excluded.last_body,
+        last_type=excluded.last_type, last_ts=excluded.last_ts, last_from_me=excluded.last_from_me,
+        last_deleted=excluded.last_deleted, updated_at=excluded.updated_at`,
+      [apiKey, chatId, displayName, isGroup, preview.id, preview.previewText, preview.body, preview.type, preview.timestamp, preview.fromMe ? 1 : 0, preview.deleted ? 1 : 0, Date.now()]);
   }
 
-  recordMessage(apiKey, chatId, message) {
-    if (!apiKey || !chatId || !message) return;
-    this.ensure(apiKey);
-    const line = JSON.stringify({ kind: 'message', seq: Date.now(), recordedAt: Date.now(), data: cleanMessage(message) });
-    fs.appendFileSync(this.messagesPath(apiKey, chatId), `${line}\n`);
-    this.upsertChat(apiKey, chatId, message, message.notifyName || message.pushname || null);
+  async recordDelete(apiKey, chatId, deletion) {
+    await this.readyPromise;
+    try {
+      const refId = canonical(deletion?.data?.refId || deletion?.data?.referenceId || deletion?.data?.msgId);
+      if (!refId) return;
+      const existing = await DB.get('SELECT message_json FROM inbox_messages WHERE api_key=? AND chat_id=? AND msg_id=?', [apiKey, chatId, refId]);
+      let msgJson;
+      if (existing?.message_json) {
+        msgJson = existing.message_json;
+      } else if (deletion?.data?.original) {
+        msgJson = JSON.stringify(cleanMessage(deletion.data.original));
+      } else {
+        msgJson = JSON.stringify({ id: refId, type: 'revoked', timestamp: Math.floor(Date.now() / 1000) });
+      }
+      const data = parseJson(msgJson, {});
+      await DB.run(`INSERT INTO inbox_messages (api_key, chat_id, msg_id, stored_at, body_text, message_json, reactions, is_deleted, edited)
+        VALUES (?,?,?,?,?,?,?,1,0)
+        ON CONFLICT(api_key, chat_id, msg_id) DO UPDATE SET is_deleted=1`,
+        [apiKey, chatId, refId, Date.now(), safeText(data), msgJson, '[]']);
+      // Reflect the deletion in the sidebar subtitle when it affects the last message.
+      const chat = await DB.get('SELECT last_message_id FROM inbox_chats WHERE api_key=? AND chat_id=?', [apiKey, chatId]);
+      if (chat?.last_message_id === refId) {
+        await DB.run('UPDATE inbox_chats SET last_deleted=1, updated_at=? WHERE api_key=? AND chat_id=?', [Date.now(), apiKey, chatId]);
+      }
+    } catch (error) {
+      console.error('Inbox recordDelete failed:', error.message);
+    }
   }
 
-  recordDelete(apiKey, chatId, deletion) {
-    if (!apiKey || !chatId || !deletion) return;
-    this.ensure(apiKey);
-    const line = JSON.stringify({
-      kind: 'delete',
-      storedAt: Date.now(),
-      refId: deletion?.data?.refId || ids(deletion?.data?.referenceId),
-      deletedAt: deletion?.data?.deletedAt || new Date().toISOString(),
-      original: deletion?.data?.original ? cleanMessage(deletion.data.original) : null,
-    });
-    fs.appendFileSync(this.messagesPath(apiKey, chatId), `${line}\n`);
+  async recordReaction(apiKey, chatId, reaction) {
+    await this.readyPromise;
+    try {
+      const refId = canonical(reaction?.msgId);
+      if (!refId) return;
+      const existing = await DB.get('SELECT reactions FROM inbox_messages WHERE api_key=? AND chat_id=? AND msg_id=?', [apiKey, chatId, refId]);
+      if (!existing) return; // reaction to a message we never recorded (pre-login) - nothing to attach
+      const list = parseJson(existing.reactions, []);
+      const sender = reaction?.sender || '';
+      const next = list.filter(r => r.senderId !== sender);
+      if (reaction?.reactionText) next.push({ emoji: reaction.reactionText, senderId: sender });
+      await DB.run('UPDATE inbox_messages SET reactions=? WHERE api_key=? AND chat_id=? AND msg_id=?', [JSON.stringify(next), apiKey, chatId, refId]);
+    } catch (error) {
+      console.error('Inbox recordReaction failed:', error.message);
+    }
   }
 
-  recordReaction(apiKey, chatId, reaction) {
-    if (!apiKey || !chatId || !reaction?.msgId) return;
-    this.ensure(apiKey);
-    const line = JSON.stringify({
-      kind: 'reaction',
-      storedAt: Date.now(),
-      refId: ids(reaction.msgId),
-      emoji: reaction.reactionText || '',
-      senderId: reaction.sender || '',
-    });
-    fs.appendFileSync(this.messagesPath(apiKey, chatId), `${line}\n`);
+  async recordEdit(apiKey, chatId, edit) {
+    await this.readyPromise;
+    try {
+      const refId = canonical(edit?.data?.id || edit?.data?.referenceId);
+      if (!refId) return;
+      const existing = await DB.get('SELECT message_json FROM inbox_messages WHERE api_key=? AND chat_id=? AND msg_id=?', [apiKey, chatId, refId]);
+      if (!existing) return;
+      const data = parseJson(existing.message_json, {});
+      for (const field of ['text', 'body', 'content', 'caption']) {
+        if (edit.data?.[field] != null) data[field] = edit.data[field];
+      }
+      await DB.run('UPDATE inbox_messages SET message_json=?, body_text=?, edited=1 WHERE api_key=? AND chat_id=? AND msg_id=?',
+        [JSON.stringify(data), safeText(data), apiKey, chatId, refId]);
+    } catch (error) {
+      console.error('Inbox recordEdit failed:', error.message);
+    }
   }
 
-  recordEdit(apiKey, chatId, edit) {
-    if (!apiKey || !chatId || !edit) return;
-    this.ensure(apiKey);
-    const line = JSON.stringify({
-      kind: 'edit',
-      storedAt: Date.now(),
-      refId: ids(edit.data?.id) || ids(edit.data?.referenceId),
-      data: cleanMessage(edit.data),
-    });
-    fs.appendFileSync(this.messagesPath(apiKey, chatId), `${line}\n`);
-  }
-
-  getChats(apiKey) {
-    const [meta, data] = [this.getMeta(apiKey), this.getChatsData(apiKey)];
-    const chats = Object.values(data)
-      .map(chat => ({ ...chat, lastMessage: chat.lastMessage || null }))
-      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  async getChats(apiKey) {
+    await this.readyPromise;
+    const [meta, rows] = await Promise.all([
+      DB.get('SELECT started_at, last_boot_at FROM inbox_meta WHERE api_key=?', [apiKey]),
+      DB.all('SELECT * FROM inbox_chats WHERE api_key=? ORDER BY updated_at DESC', [apiKey]),
+    ]);
     return {
-      startedAt: meta?.startedAt || null,
-      lastBootAt: meta?.lastBootAt || null,
-      total: chats.length,
-      chats,
+      startedAt: meta?.started_at ? new Date(meta.started_at).toISOString() : null,
+      lastBootAt: meta?.last_boot_at ? new Date(meta.last_boot_at).toISOString() : null,
+      total: rows.length,
+      chats: rows.map(row => ({
+        id: row.chat_id,
+        displayName: row.display_name || row.chat_id.split('@')[0],
+        isGroup: Boolean(row.is_group),
+        lastMessage: {
+          id: row.last_message_id,
+          body: row.last_body,
+          previewText: row.last_preview,
+          type: row.last_type || 'chat',
+          timestamp: row.last_ts,
+          fromMe: Boolean(row.last_from_me),
+          deleted: Boolean(row.last_deleted),
+        },
+      })),
     };
   }
 
-  getMessages(apiKey, chatId, { count = 50, before } = {}) {
-    const file = this.messagesPath(apiKey, chatId);
+  async getMessages(apiKey, chatId, { count = 50, before } = {}) {
+    await this.readyPromise;
     const limit = Math.min(Math.max(Number(count) || 50, 1), 200);
-    let lines;
-    try { lines = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean); } catch (_) { return { messages: [], hasMore: false, cursor: null }; }
-
-    const entries = lines
-      .map(line => { try { return JSON.parse(line); } catch (_) { return null; } })
-      .filter(Boolean)
-      .filter(entry => !before || (entry.storedAt || entry.seq) < Number(before));
-
-    const messages = new Map();
-    const reactions = new Map(); // refId -> senderId -> emoji (last wins)
-    const deletions = new Map();
-    const edits = new Map();
-
-    for (const entry of entries) {
-      if (entry.kind === 'message') {
-        const id = ids(entry.data?.id);
-        if (!id) continue;
-        // re-clone latest occurrence; key on canonical (strip nothing here - our
-        // records already hold real ids from the server)
-        messages.set(id, entry.data);
-      } else if (entry.kind === 'reaction' && entry.refId) {
-        const bySender = reactions.get(entry.refId) || {};
-        if (entry.senderId) { bySender[entry.senderId] = entry.emoji; reactions.set(entry.refId, bySender); }
-      } else if (entry.kind === 'delete' && entry.refId) {
-        deletions.set(entry.refId, entry);
-      } else if (entry.kind === 'edit' && entry.refId) {
-        edits.set(entry.refId, entry);
-      }
-    }
-
-    let list = [...messages.entries()].map(([id, data]) => {
-      const message = { ...data };
-      const deleted = deletions.get(id);
-      if (deleted) {
-        const original = deleted.original;
-        message.isDeleted = true;
-        message.isRevoked = true;
-        message.deleted = true;
-        // The original body (recorded at arrival) survives the WhatsApp stub.
-        if (original && !safeText(message) && safeText(original)) {
-          for (const field of ['text', 'body', 'content', 'caption']) {
-            if (original[field] != null) message[field] = original[field];
-          }
-          if (original.type) message.type = original.type;
-        }
-      }
-      const edited = edits.get(id);
-      if (edited?.data) {
-        const edit = edited.data;
-        for (const field of ['text', 'body', 'content', 'caption']) {
-          if (edits.get(id).data[field] != null) message[field] = edit[field];
-        }
-        message.edited = true;
-      }
-      const reacts = reactions.get(id);
-      if (reacts) {
-        message._reactions = Object.entries(reacts)
-          .filter(([, emoji]) => emoji)
-          .map(([senderId, emoji]) => ({ emoji, senderId }));
-      }
-      return message;
-    });
-
-    list.sort((a, b) => (a.timestamp || a.t || 0) - (b.timestamp || b.t || 0));
-    const page = list.slice(-limit);
-    if (!page.length) return { messages: [], hasMore: false, cursor: before || null };
-    const oldestId = ids(page[0].id);
-    const oldestEntry = entries.find(e => e.kind === 'message' && ids(e.data?.id) === oldestId);
-    const oldestStoredAt = oldestEntry?.storedAt || oldestEntry?.seq || (page[0].timestamp || 0);
-    return { messages: page, hasMore: list.length > limit, cursor: Number(oldestStoredAt) || null };
+    const rows = before
+      ? await DB.all('SELECT * FROM inbox_messages WHERE api_key=? AND chat_id=? AND stored_at<? ORDER BY stored_at DESC LIMIT ?', [apiKey, chatId, Number(before), limit + 1])
+      : await DB.all('SELECT * FROM inbox_messages WHERE api_key=? AND chat_id=? ORDER BY stored_at DESC LIMIT ?', [apiKey, chatId, limit + 1]);
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit).reverse();
+    const messages = page.map(this.materialize);
+    const cursor = page.length ? page[0].stored_at : (before || null);
+    return { messages, hasMore, cursor };
   }
 
-  search(apiKey, query, limit = 25) {
+  materialize(row) {
+    const data = parseJson(row.message_json, {});
+    return {
+      ...data,
+      isDeleted: Boolean(row.is_deleted),
+      isRevoked: Boolean(row.is_deleted),
+      deleted: Boolean(row.is_deleted),
+      edited: Boolean(row.edited),
+      _reactions: parseJson(row.reactions, []),
+    };
+  }
+
+  async search(apiKey, query, limit = 25) {
+    await this.readyPromise;
     if (!query || !String(query).trim()) return [];
-    const q = String(query).toLowerCase();
+    const q = `%${String(query).trim()}%`;
     const count = Math.min(Math.max(Number(limit) || 25, 1), 100);
-    const chats = this.getChatsData(apiKey);
-    const results = [];
-    const chatIds = Object.keys(chats);
-    for (const chatId of chatIds) {
-      if (results.length >= count * 4) break;
-      const file = this.messagesPath(apiKey, chatId);
-      let lines;
-      try { lines = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean); } catch (_) { continue; }
-      // newest first so matches surface recent content
-      for (let i = lines.length - 1; i >= 0 && results.length < count; i -= 1) {
-        let entry;
-        try { entry = JSON.parse(lines[i]); } catch (_) { continue; }
-        if (entry.kind !== 'message') continue;
-        const text = safeText(entry.data);
-        if (text && text.toLowerCase().includes(q)) {
-          results.push({
-            chatId,
-            displayName: chats[chatId]?.displayName || chatId.split('@')[0],
-            message: { id: ids(entry.data.id), body: text, previewText: previewText(entry.data), type: entry.data.type || 'chat', timestamp: entry.data.timestamp || entry.data.t || 0, fromMe: Boolean(entry.data.fromMe) },
-          });
-        }
-      }
-    }
-    return results.slice(0, count);
+    const rows = await DB.all(`
+      SELECT im.chat_id, im.msg_id, im.message_json, im.body_text, im.is_deleted, im.stored_at, c.display_name
+      FROM inbox_messages im
+      LEFT JOIN inbox_chats c ON c.api_key = im.api_key AND c.chat_id = im.chat_id
+      WHERE im.api_key=? AND (im.body_text LIKE ? OR im.message_json LIKE ?)
+      ORDER BY im.stored_at DESC LIMIT ?`,
+      [apiKey, q, q, count]);
+    return rows
+      .filter(row => String(row.body_text || '').trim())
+      .map(row => ({
+        chatId: row.chat_id,
+        displayName: row.display_name || row.chat_id.split('@')[0],
+        message: {
+          id: row.msg_id,
+          body: row.body_text,
+          previewText: row.body_text,
+          type: 'chat',
+          timestamp: Math.floor((Number(row.stored_at) || 0) / 1000),
+          fromMe: false,
+          isDeleted: Boolean(row.is_deleted),
+        },
+      }));
   }
 }
 

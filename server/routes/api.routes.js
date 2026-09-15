@@ -56,20 +56,32 @@ router.get('/status', (req, res) => {
 
 // Durable per-tenant inbox: the chat list recorded from the moment the user
 // first signed in, readable without an active WhatsApp connection.
-router.get('/inbox', (req, res) => {
-  res.json(inboxStore.getChats(res.locals.apiKey));
+router.get('/inbox', async (req, res) => {
+  try {
+    res.json(await inboxStore.getChats(res.locals.apiKey));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-router.get('/inbox/search', (req, res) => {
-  res.json({ results: inboxStore.search(res.locals.apiKey, req.query.q, req.query.limit) });
+router.get('/inbox/search', async (req, res) => {
+  try {
+    res.json({ results: await inboxStore.search(res.locals.apiKey, req.query.q, req.query.limit) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Messages persisted for a chat since the user signed in (paginated by
 // "before" cursor). Lives entirely on disk - no WhatsApp round-trip.
-router.get('/inbox/:chatId/messages', (req, res) => {
-  let chatId;
-  try { chatId = decodeURIComponent(req.params.chatId); } catch (_) { chatId = req.params.chatId; }
-  res.json(inboxStore.getMessages(res.locals.apiKey, chatId, req.query));
+router.get('/inbox/:chatId/messages', async (req, res) => {
+  try {
+    let chatId;
+    try { chatId = decodeURIComponent(req.params.chatId); } catch (_) { chatId = req.params.chatId; }
+    res.json(await inboxStore.getMessages(res.locals.apiKey, chatId, req.query));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Send a message (optionally as a quote/reply to another message)
