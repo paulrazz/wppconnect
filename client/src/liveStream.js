@@ -122,6 +122,22 @@ const pushMessage = (message, targetId) => {
     addSentMessage: (chatId, sentMsg) => {
       if (pushMessage(sentMsg, chatId)) notify();
     },
+    seedMessages: (chatId, messages) => {
+      if (!chatId || !Array.isArray(messages) || !messages.length) return;
+      if (!chats[chatId]) chats[chatId] = { messages: [] };
+      const list = chats[chatId].messages;
+      let changed = false;
+      for (const message of messages) {
+        const key = dedupeKey(message);
+        if (key && list.some(m => dedupeKey(m) === key)) continue;
+        list.push(normalizeOut(message));
+        changed = true;
+      }
+      if (changed) {
+        list.sort((a, b) => (a.timestamp || a.t || 0) - (b.timestamp || b.t || 0));
+        notify();
+      }
+    },
     subscribe: (fn) => {
       listeners.add(fn);
       return () => listeners.delete(fn);

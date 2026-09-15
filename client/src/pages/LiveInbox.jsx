@@ -115,9 +115,7 @@ function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReac
           </div>
         )}
 
-        {isDeleted ? (
-          <p className="italic opacity-70 text-xs">🚫 This message was deleted</p>
-        ) : isMedia ? (
+        {isMedia ? (
           <>
             <MediaContent message={message} apiKey={apiKey} theme={theme} />
             {text && <p className="text-sm whitespace-pre-wrap break-words mt-1.5">{text}</p>}
@@ -133,12 +131,15 @@ function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReac
           <p className="flex items-center gap-2 text-sm">
             <span className="text-base">👤</span> {message.vcardFormattedName || message.contactFormattedName || message.contactName || (type === 'vcard' && message.vcard ? 'Contact card' : text || 'Contact card')}
           </p>
-        ) : type === 'chat' ? (
-          <p className="text-sm whitespace-pre-wrap break-words">{text || '…'}</p>
-        ) : type === 'revoked' ? (
-          <p className="italic opacity-70 text-xs">🚫 This message was deleted</p>
-        ) : (
-          <p className="text-sm italic opacity-80">{text || `[${type.replaceAll('_', ' ')}]`}</p>
+        ) : text ? (
+          <p className="text-sm whitespace-pre-wrap break-words">{text}</p>
+        ) : isDeleted ? null : (
+          <p className="text-sm italic opacity-80">{type === 'chat' || type === 'revoked' ? '…' : `[${type.replaceAll('_', ' ')}]`}</p>
+        )}
+        {isDeleted && (
+          <p className={`mt-1 italic text-[10px] font-semibold uppercase tracking-wide ${isMe ? 'text-indigo-100/90' : theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+            🚫 Deleted message
+          </p>
         )}
       </div>
 
@@ -196,6 +197,7 @@ export default function LiveInbox() {
   const [activeChatId, setActiveChatId] = useState(null);
   const [replyTo, setReplyTo] = useState(null);
   const messagesEndRef = useRef(null);
+  const loadingHistoryRef = useRef(null);
 
   // The live stream lives at the app level (connected even while on another
   // page), so every incoming chat is captured here regardless of navigation.
@@ -270,6 +272,38 @@ export default function LiveInbox() {
   const openChat = (chatId) => {
     setActiveChatId(chatId);
     liveStream.setActiveChat(chatId);
+    // History on demand: if this chat has no live bucket yet, pull the newest
+    // real messages so anything visible in the subtitle is also readable in the
+    // box (in full, including deleted messages that WhatsApp still holds).
+    if (!liveStream.getChats()[chatId]?.messages?.length) loadSeededHistory(chatId);
+  };
+
+  const loadSeededHistory = async (chatId) => {
+    if (loadingHistoryRef.current === chatId) return;
+    loadingHistoryRef.current = chatId;
+    try {
+      const res = await axios.get(`${API_URL}/messages/${encodeURIComponent(chatId)}?count=30`, { headers: { 'x-api-key': apiKey } });
+      liveStream.seedMessages(chatId, Array.isArray(res.data?.messages) ? res.data.messages : []);
+      // If WhatsApp has fully scrubbed the chat (e.g. "delete for me"), keep the
+      // subtitle message readable anyway - it's always somewhere on screen.
+      const bucketHas = liveStream.getChats()[chatId]?.messages?.length;
+      if (!bucketHas) {
+        const preview = apiChats.find(c => c.id === chatId)?.lastMessage;
+        if (preview) {
+          liveStream.seedMessages(chatId, [{
+            id: preview.id,
+            body: preview.previewText || preview.body || '',
+            type: preview.type || 'chat',
+            timestamp: preview.timestamp || Math.floor(Date.now() / 1000),
+            fromMe: Boolean(preview.fromMe),
+          }]);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load chat history", err);
+    } finally {
+      loadingHistoryRef.current = null;
+    }
   };
 
   const onMessageSent = useCallback((sentMsg) => {
@@ -443,8 +477,8 @@ export default function LiveInbox() {
               {!activeChatData || activeChatData.messages.length === 0 ? (
                 <div className={`flex-1 flex flex-col items-center justify-center text-center p-8 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
                   <MessageSquare className="w-10 h-10 mb-3 opacity-40" />
-                  <p className="text-sm font-medium">No live messages here yet</p>
-                  <p className="text-xs mt-1">This inbox starts clean - history is not loaded. Messages will appear here the moment they happen.</p>
+                  <p className="text-sm font-medium">No messages here yet</p>
+                  <p className="text-xs mt-1">New messages and the latest conversation history will appear here as they're available.</p>
                 </div>
               ) : (
                 activeChatData.messages.map((msg, idx) => (
