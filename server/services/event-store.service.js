@@ -109,6 +109,30 @@ class EventStore {
     return null;
   }
 
+  // Recovery fallback for messages that fell out of the in-memory cache
+  // (the ledger keeps every line forever, but only the last ~5000 are hot).
+  // Scan the whole file for the original message line - used when a deleted
+  // stub needs its text back. Only triggers on a cache miss, so it is cheap
+  // in practice (once recovered it is cached for subsequent lookups).
+  getMessageDeep(id) {
+    const cached = this.getMessage(id);
+    if (cached) return cached;
+    const aliases = new Set(this.aliasesOf(id));
+    if (!aliases.size) return null;
+    let found = null;
+    try {
+      const lines = fs.readFileSync(this.file, 'utf8').split('\n');
+      for (const line of lines) {
+        let entry;
+        try { entry = JSON.parse(line); } catch (_) { continue; }
+        if (!['message.received', 'message.sent', 'message.snapshot'].includes(entry.type)) continue;
+        if (aliases.has(this.idOf(entry.data?.id))) found = entry.data;
+      }
+    } catch (_) {}
+    if (found) this.indexMessage(found);
+    return found;
+  }
+
   mediaPath(id) { const safe = this.idOf(id).replace(/[^A-Za-z0-9._-]/g, '_'); return safe ? path.join(this.mediaDirectory, safe) : null; }
   cacheMedia(id, dataUrl, metadata = {}) {
     const target = this.mediaPath(id);

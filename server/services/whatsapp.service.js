@@ -390,7 +390,7 @@ class WhatsAppService {
         return;
       }
       const referenceId = data.refId || data.msgId || data.protocolMessageKey || data.id;
-      let original = eventStore.getMessage(referenceId);
+      let original = eventStore.getMessageDeep(referenceId);
       if (!original && referenceId) {
         try { original = await client.getMessageById(eventStore.idOf(referenceId)); } catch (_) { /* Already removed from WhatsApp's live store. */ }
       }
@@ -623,7 +623,7 @@ class WhatsAppService {
           // subtitle keeps showing the real text (with a deleted marker)
           // instead of silently becoming "Message deleted".
           const isDel = Boolean(lastMessage.isDeleted || lastMessage.isRevoked || String(lastMessage.type || '').toLowerCase() === 'revoked');
-          const original = isDel && eventStore.idOf(lastMessage.id) ? eventStore.getMessage(eventStore.idOf(lastMessage.id)) : null;
+          const original = isDel && eventStore.idOf(lastMessage.id) ? eventStore.getMessageDeep(eventStore.idOf(lastMessage.id)) : null;
           const display = original || lastMessage;
           const displayText = safeMessageText(display);
           return {
