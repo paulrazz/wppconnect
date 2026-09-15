@@ -470,10 +470,24 @@ class WhatsAppService {
   }
 
   async bootstrapInbox(session) {
+    const client = session.client;
+    if (!client) return;
+    let chats = null;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      if (session.client !== client) return; // session stopped or replaced while waiting
+      try {
+        if (!(await client.isLoggedIn())) return;
+        chats = await client.listChats();
+        break;
+      } catch (error) {
+        // listChats races the WAPI bootstrap that runs right after CONNECTED;
+        // retry until the page has finished injecting it.
+        if (attempt === 7) { console.warn('Inbox baseline capture failed:', error.message); return; }
+        await new Promise(resolve => setTimeout(resolve, attempt < 2 ? 2500 : 4000));
+      }
+    }
+    if (session.client !== client || !Array.isArray(chats)) return;
     try {
-      const client = session.client;
-      if (!client || !(await client.isLoggedIn())) return;
-      const chats = await client.listChats();
       await inboxStore.bootstrap(session.apiKey, chats);
       console.log(`Inbox baseline captured for ${session.apiKey.slice(0, 8)} (${chats.length} chats)`);
     } catch (error) {

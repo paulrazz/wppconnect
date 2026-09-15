@@ -252,19 +252,26 @@ export default function LiveInbox() {
     try {
       // The durable inbox is the source of truth: every chat recorded since the
       // user first signed in, still available even if WhatsApp is disconnected.
-      const res = await axios.get(`${API_URL}/inbox`, { headers: { 'x-api-key': key } });
-      const inboxChats = Array.isArray(res.data?.chats) ? res.data.chats : [];
-      if (res.data?.startedAt) setInboxSince(res.data.startedAt);
-      if (inboxChats.length) {
-        const mapped = inboxChats.map(mapChat).filter(c => c.id);
-        setApiChats(mapped);
-        try { localStorage.setItem(CHATS_CACHE_KEY(key), JSON.stringify({ chats: mapped, at: Date.now() })); } catch (_) {}
-        return;
-      }
-      // Brand-new key: fall back to WhatsApp's live list so the sidebar isn't
-      // blank before the first baseline snapshot lands.
-      const live = await axios.get(`${API_URL}/chats`, { headers: { 'x-api-key': key } });
-      const mapped = (Array.isArray(live.data?.chats) ? live.data.chats : []).map(mapChat).filter(c => c.id);
+      // A fresh/partial baseline must never hide chats, so the live list (same
+      // canonical ids) is always merged in too - filling gaps and replacing
+      // id-fallback display names with real contact names.
+      const [inboxRes, liveRes] = await Promise.allSettled([
+        axios.get(`${API_URL}/inbox`, { headers: { 'x-api-key': key } }),
+        axios.get(`${API_URL}/chats`, { headers: { 'x-api-key': key } }),
+      ]);
+      const inboxChats = inboxRes.status === 'fulfilled' && Array.isArray(inboxRes.value.data?.chats) ? inboxRes.value.data.chats : [];
+      const liveChats = liveRes.status === 'fulfilled' && Array.isArray(liveRes.value.data?.chats) ? liveRes.value.data.chats : [];
+      if (inboxRes.status === 'fulfilled' && inboxRes.value.data?.startedAt) setInboxSince(inboxRes.value.data.startedAt);
+      const merged = new Map();
+      inboxChats.forEach(c => { const m = mapChat(c); if (m.id) merged.set(m.id, m); });
+      liveChats.forEach(c => {
+        const m = mapChat(c);
+        if (!m.id) return;
+        const existing = merged.get(m.id);
+        if (!existing) { merged.set(m.id, m); return; }
+        if (!existing.displayName || existing.displayName.includes('@')) existing.displayName = m.displayName || existing.displayName;
+      });
+      const mapped = [...merged.values()].filter(c => c.id);
       setApiChats(mapped);
       try { localStorage.setItem(CHATS_CACHE_KEY(key), JSON.stringify({ chats: mapped, at: Date.now() })); } catch (_) {}
     } catch (err) {

@@ -155,87 +155,97 @@ class InboxStore {
   }
 
   // One-time import of data written by the earlier JSONL inbox layout, so
-  // nothing recorded so far is lost after this upgrade. Legacy folders are
-  // renamed out of the way once imported.
+  // nothing recorded so far is lost after this upgrade. Finished folders were
+  // renamed to `*.legacy`; those are re-imported only when the key's baseline
+  // is missing (i.e. a reset/stranded volume where SQLite lost its rows). A
+  // folder is deleted only after its import fully succeeds - SQLite is the
+  // canonical store, the JSONL layout is the redundant leftover.
   async migrateLegacy() {
     const root = path.resolve(__dirname, '..', 'data', 'inbox');
-    let keys;
-    try { keys = fs.readdirSync(root); } catch (_) { return; }
-    for (const folder of keys) {
-      const dir = path.join(root, folder);
+    let entries;
+    try { entries = fs.readdirSync(root); } catch (_) { return; }
+    for (const entry of entries) {
+      const dir = path.join(root, entry);
       let stat;
       try { stat = fs.statSync(dir); } catch (_) { continue; }
-      if (!stat.isDirectory() || folder.endsWith('.legacy')) continue;
+      if (!stat.isDirectory()) continue;
+      const folder = String(entry);
+      const isLegacy = folder.endsWith('.legacy');
       try {
-        const metaPath = path.join(dir, 'meta.json');
-        const chatsPath = path.join(dir, 'chats.json');
-        const meta = parseJson(fs.readFileSync(metaPath, 'utf8'), {});
-        if (meta.apiKey) {
-          await DB.run(`INSERT INTO inbox_meta (api_key, started_at, last_boot_at, updated_at) VALUES (?,?,?,?)
-            ON CONFLICT(api_key) DO UPDATE SET updated_at=excluded.updated_at`,
-            [meta.apiKey, new Date(meta.startedAt || Date.now()).getTime(), Date.now(), Date.now()]);
+        const meta = parseJson(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'), {});
+        if (!meta.apiKey) { console.warn('Inbox legacy folder has no api_key, skipping:', folder); continue; }
+        if (isLegacy) {
+          const existing = await DB.get('SELECT started_at FROM inbox_meta WHERE api_key=?', [meta.apiKey]);
+          if (existing?.started_at) continue; // already imported, nothing to recover
         }
-        const chats = parseJson(fs.readFileSync(chatsPath, 'utf8'), {});
-        for (const [chatId, chat] of Object.entries(chats)) {
-          await DB.run(`INSERT OR IGNORE INTO inbox_chats
-            (api_key, chat_id, display_name, is_group, last_message_id, last_preview, last_body, last_type, last_ts, last_from_me, last_deleted, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-            [meta.apiKey, chatId, chat.displayName || chatId.split('@')[0], chat.isGroup ? 1 : 0,
-             chat.lastMessage?.id || null, chat.lastMessage?.previewText || '', chat.lastMessage?.body || '', chat.lastMessage?.type || 'chat',
-             chat.lastMessage?.timestamp || 0, chat.lastMessage?.fromMe ? 1 : 0, chat.lastMessage?.deleted ? 1 : 0, chat.updatedAt || Date.now()]);
-        }
-        const messagesDir = path.join(dir, 'messages');
-        let files;
-        try { files = fs.readdirSync(messagesDir); } catch (_) { files = []; }
-        for (const file of files) {
-          if (!file.endsWith('.jsonl')) continue;
-          let chatId;
-          try { chatId = decodeURIComponent(file.replace(/\.jsonl$/, '')); } catch (_) { continue; }
-          let lines;
-          try { lines = fs.readFileSync(path.join(messagesDir, file), 'utf8').trim().split('\n').filter(Boolean); } catch (_) { continue; }
-          await DB.run('BEGIN');
-          try {
-            for (const line of lines) {
-              const entry = parseJson(line, null);
-              if (!entry) continue;
-              const storedAt = entry.storedAt || entry.seq || Date.now();
-              if (entry.kind === 'message') {
-                await DB.run(`INSERT OR IGNORE INTO inbox_messages
-                  (api_key, chat_id, msg_id, stored_at, body_text, message_json, reactions, is_deleted, edited)
-                  VALUES (?,?,?,?,?,?,?,?,?)`,
-                  [meta.apiKey, chatId, canonical(entry.data?.id), storedAt, safeText(entry.data), JSON.stringify(cleanMessage(entry.data) || {}), '[]', 0, 0]);
-              } else if (entry.kind === 'delete') {
-                const existing = await DB.get('SELECT message_json FROM inbox_messages WHERE api_key=? AND chat_id=? AND msg_id=?', [meta.apiKey, chatId, entry.refId]);
-                const msgJson = existing?.message_json || (entry.original ? JSON.stringify(cleanMessage(entry.original)) : JSON.stringify({ id: entry.refId, type: 'revoked' }));
-                await DB.run(`INSERT INTO inbox_messages (api_key, chat_id, msg_id, stored_at, body_text, message_json, reactions, is_deleted, edited)
-                  VALUES (?,?,?,?,?,?,?,1,0)
-                  ON CONFLICT(api_key, chat_id, msg_id) DO UPDATE SET is_deleted=1`,
-                  [meta.apiKey, chatId, entry.refId, storedAt, safeText(parseJson(msgJson, {})), msgJson, '[]']);
-              } else if (entry.kind === 'reaction') {
-                await DB.run(`UPDATE inbox_messages SET reactions=? WHERE api_key=? AND chat_id=? AND msg_id=?`,
-                  [JSON.stringify([{ emoji: entry.emoji, senderId: entry.senderId }]), meta.apiKey, chatId, entry.refId]);
-              } else if (entry.kind === 'edit') {
-                const existing = await DB.get('SELECT message_json FROM inbox_messages WHERE api_key=? AND chat_id=? AND msg_id=?', [meta.apiKey, chatId, entry.refId]);
-                if (existing) {
-                  const data = parseJson(existing.message_json, {});
-                  for (const field of ['text', 'body', 'content', 'caption']) {
-                    if (entry.data?.[field] != null) data[field] = entry.data[field];
-                  }
-                  await DB.run('UPDATE inbox_messages SET message_json=?, edited=1 WHERE api_key=? AND chat_id=? AND msg_id=?',
-                    [JSON.stringify(data), meta.apiKey, chatId, entry.refId]);
-                }
-              }
-            }
-            await DB.run('COMMIT');
-          } catch (transactionError) {
-            await DB.run('ROLLBACK').catch(() => {});
-            throw transactionError;
-          }
-        }
-        fs.renameSync(dir, `${dir}.legacy`);
-        console.log(`Inbox migrated to SQLite for key ${String(meta.apiKey).slice(0, 8)}…`);
+        await this.importLegacyFolder(meta, dir);
+        fs.rmSync(dir, { recursive: true, force: true });
+        console.log(`Inbox legacy data imported to SQLite (${meta.apiKey.slice(0, 8)}) and removed`);
       } catch (error) {
         console.warn('Inbox legacy migration skipped for a folder:', error.message);
+      }
+    }
+  }
+
+  async importLegacyFolder(meta, dir) {
+    await DB.run(`INSERT INTO inbox_meta (api_key, started_at, last_boot_at, updated_at) VALUES (?,?,?,?)
+      ON CONFLICT(api_key) DO UPDATE SET updated_at=excluded.updated_at`,
+      [meta.apiKey, new Date(meta.startedAt || Date.now()).getTime(), Date.now(), Date.now()]);
+    const chats = parseJson(fs.readFileSync(path.join(dir, 'chats.json'), 'utf8'), {});
+    for (const [chatId, chat] of Object.entries(chats)) {
+      await DB.run(`INSERT OR IGNORE INTO inbox_chats
+        (api_key, chat_id, display_name, is_group, last_message_id, last_preview, last_body, last_type, last_ts, last_from_me, last_deleted, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [meta.apiKey, chatId, chat.displayName || chatId.split('@')[0], chat.isGroup ? 1 : 0,
+         chat.lastMessage?.id || null, chat.lastMessage?.previewText || '', chat.lastMessage?.body || '', chat.lastMessage?.type || 'chat',
+         chat.lastMessage?.timestamp || 0, chat.lastMessage?.fromMe ? 1 : 0, chat.lastMessage?.deleted ? 1 : 0, chat.updatedAt || Date.now()]);
+    }
+    const messagesDir = path.join(dir, 'messages');
+    let files;
+    try { files = fs.readdirSync(messagesDir); } catch (_) { files = []; }
+    for (const file of files) {
+      if (!file.endsWith('.jsonl')) continue;
+      let chatId;
+      try { chatId = decodeURIComponent(file.replace(/\.jsonl$/, '')); } catch (_) { continue; }
+      let lines;
+      try { lines = fs.readFileSync(path.join(messagesDir, file), 'utf8').trim().split('\n').filter(Boolean); } catch (_) { continue; }
+      await DB.run('BEGIN');
+      try {
+        for (const line of lines) {
+          const entry = parseJson(line, null);
+          if (!entry) continue;
+          const storedAt = entry.storedAt || entry.seq || Date.now();
+          if (entry.kind === 'message') {
+            await DB.run(`INSERT OR IGNORE INTO inbox_messages
+              (api_key, chat_id, msg_id, stored_at, body_text, message_json, reactions, is_deleted, edited)
+              VALUES (?,?,?,?,?,?,?,?,?)`,
+              [meta.apiKey, chatId, canonical(entry.data?.id), storedAt, safeText(entry.data), JSON.stringify(cleanMessage(entry.data) || {}), '[]', 0, 0]);
+          } else if (entry.kind === 'delete') {
+            const existing = await DB.get('SELECT message_json FROM inbox_messages WHERE api_key=? AND chat_id=? AND msg_id=?', [meta.apiKey, chatId, entry.refId]);
+            const msgJson = existing?.message_json || (entry.original ? JSON.stringify(cleanMessage(entry.original)) : JSON.stringify({ id: entry.refId, type: 'revoked' }));
+            await DB.run(`INSERT INTO inbox_messages (api_key, chat_id, msg_id, stored_at, body_text, message_json, reactions, is_deleted, edited)
+              VALUES (?,?,?,?,?,?,?,1,0)
+              ON CONFLICT(api_key, chat_id, msg_id) DO UPDATE SET is_deleted=1`,
+              [meta.apiKey, chatId, entry.refId, storedAt, safeText(parseJson(msgJson, {})), msgJson, '[]']);
+          } else if (entry.kind === 'reaction') {
+            await DB.run(`UPDATE inbox_messages SET reactions=? WHERE api_key=? AND chat_id=? AND msg_id=?`,
+              [JSON.stringify([{ emoji: entry.emoji, senderId: entry.senderId }]), meta.apiKey, chatId, entry.refId]);
+          } else if (entry.kind === 'edit') {
+            const existing = await DB.get('SELECT message_json FROM inbox_messages WHERE api_key=? AND chat_id=? AND msg_id=?', [meta.apiKey, chatId, entry.refId]);
+            if (existing) {
+              const data = parseJson(existing.message_json, {});
+              for (const field of ['text', 'body', 'content', 'caption']) {
+                if (entry.data?.[field] != null) data[field] = entry.data[field];
+              }
+              await DB.run('UPDATE inbox_messages SET message_json=?, edited=1 WHERE api_key=? AND chat_id=? AND msg_id=?',
+                [JSON.stringify(data), meta.apiKey, chatId, entry.refId]);
+            }
+          }
+        }
+        await DB.run('COMMIT');
+      } catch (transactionError) {
+        await DB.run('ROLLBACK').catch(() => {});
+        throw transactionError;
       }
     }
   }
@@ -275,11 +285,17 @@ class InboxStore {
         ? (chat.name || chat.groupMetadata?.subject || chatId.split('@')[0])
         : (contact.name || contact.formattedName || contact.verifiedName || contact.pushname || contact.shortName || chat.name || chatId.split('@')[0]);
       const preview = previewDto(lastMessage, chat.t);
-      // INSERT OR IGNORE: a live-recorded chat row is never clobbered by the
-      // (older) baseline snapshot.
-      await DB.run(`INSERT OR IGNORE INTO inbox_chats
+      // INSERT OR IGNORE semantics for preview columns: a live-recorded chat
+      // row (with real last-message text) is never clobbered by this (older)
+      // baseline snapshot. display_name and is_group are still repaired on
+      // conflict so a fallback id-name from a live-only row picks up the real
+      // contact name once the baseline snapshot lands.
+      await DB.run(`INSERT INTO inbox_chats
         (api_key, chat_id, display_name, is_group, last_message_id, last_preview, last_body, last_type, last_ts, last_from_me, last_deleted, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(api_key, chat_id) DO UPDATE SET
+          display_name = CASE WHEN lower(inbox_chats.display_name) = lower(substr(inbox_chats.chat_id, 1, instr(inbox_chats.chat_id, '@') - 1)) THEN excluded.display_name ELSE inbox_chats.display_name END,
+          is_group = excluded.is_group`,
         [apiKey, chatId, displayName, isGroup ? 1 : 0, preview.id, preview.previewText, preview.body, preview.type, preview.timestamp, preview.fromMe ? 1 : 0, preview.deleted ? 1 : 0, Date.now()]);
     }
   }
