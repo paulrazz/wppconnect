@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const whatsapp = require('../services/whatsapp.service');
 const webhooks = require('../services/webhook.service');
+const automation = require('../services/automation.service');
 
 const crypto = require('crypto');
 
@@ -27,7 +28,7 @@ router.get('/capabilities', (_req, res) => ok(res, {
   apiVersion: 'v1',
   messages: ['text', 'buttons', 'list', 'poll', 'file', 'image', 'video', 'audio', 'voice', 'sticker', 'location', 'contact', 'reaction'],
   events: ['message.received', 'message.sent', 'message.ack', 'message.deleted', 'message.edited', 'message.reaction', 'call.received', 'session.status', 'whatsapp.state', 'status.received', 'status.deleted'],
-  resources: ['session', 'chats', 'messages', 'contacts', 'groups', 'statuses', 'events', 'deletions', 'deleted-messages', 'webhooks'],
+  resources: ['session', 'chats', 'messages', 'contacts', 'groups', 'statuses', 'events', 'deletions', 'deleted-messages', 'webhooks', 'automation'],
   documentation: '/api/v1/openapi.yaml',
 }));
 
@@ -97,6 +98,25 @@ router.post('/webhooks', async (req, res) => ok(res, await webhooks.create(req.b
 router.delete('/webhooks/:id', (req, res) => {
   if (!webhooks.remove(req.params.id)) { const error = new Error('Webhook not found'); error.statusCode = 404; throw error; }
   ok(res, { deleted: true });
+});
+
+// ---- Automation rules (visual playground) ----------------------------
+router.get('/automation', (_req, res) => ok(res, automation.list(res.locals.apiKey)));
+router.get('/automation/spec', (_req, res) => ok(res, automation.spec()));
+router.post('/automation', (req, res) => ok(res, automation.create(res.locals.apiKey, req.body || {}), 201));
+router.put('/automation/:id', (req, res) => {
+  const rule = automation.update(res.locals.apiKey, req.params.id, req.body || {});
+  if (!rule) { const error = new Error('Automation rule not found'); error.statusCode = 404; throw error; }
+  ok(res, rule);
+});
+router.delete('/automation/:id', (req, res) => {
+  if (!automation.remove(res.locals.apiKey, req.params.id)) { const error = new Error('Automation rule not found'); error.statusCode = 404; throw error; }
+  ok(res, { deleted: true });
+});
+router.post('/automation/:id/test', (req, res) => {
+  const rule = automation.get(res.locals.apiKey, req.params.id);
+  if (!rule) { const error = new Error('Automation rule not found'); error.statusCode = 404; throw error; }
+  ok(res, { rule: { id: rule.id, name: rule.name }, match: automation.testMatch(res.locals.apiKey, req.params.id, req.body || {}) });
 });
 
 module.exports = router;

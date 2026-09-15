@@ -28,6 +28,7 @@ function createLiveStream() {
   const listeners = new Set();
   const chats = {};       // chatId -> { messages: [] }  (live messages only)
   const reactions = {};   // msgId -> [{ emoji, senderId }]
+  const automationEvents = []; // recent rule executions (ran / error)
 
   const notify = () => {
     version += 1;
@@ -126,6 +127,12 @@ const pushMessage = (message, targetId) => {
     socket.on('session_status', (status) => sessionStore.setStatus(status));
     socket.on('session_details', (details) => sessionStore.setDetails(details));
     socket.on('qr_code', (qrBase64) => sessionStore.setQr(qrBase64));
+
+    socket.on('automation_event', (event) => {
+      automationEvents.unshift({ ...event, receivedAt: Date.now() });
+      if (automationEvents.length > 50) automationEvents.length = 50;
+      notify();
+    });
   };
 
   const connect = async (key) => {
@@ -186,6 +193,7 @@ const pushMessage = (message, targetId) => {
     get version() { return version; },
     getChats: () => chats,
     getReactions: () => reactions,
+    getAutomationEvents: () => automationEvents,
   };
 }
 

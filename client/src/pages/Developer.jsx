@@ -4,7 +4,8 @@ import axios from 'axios';
 import { getApiKey } from '../auth';
 import { sessionStore } from '../sessionStore';
 import { useNavigate } from 'react-router-dom';
-import { Code2, Copy, Lock, Check, Terminal, PlayCircle, LoaderCircle, Webhook, Activity, FileText, MessageSquare, Server, Image as ImageIcon, Users, Plus, Trash2, Globe } from 'lucide-react';
+import { Code2, Copy, Lock, Check, Terminal, PlayCircle, LoaderCircle, Webhook, Activity, FileText, MessageSquare, Server, Image as ImageIcon, Users, Plus, Trash2, Globe, Zap } from 'lucide-react';
+import AutomationStudio from '../components/AutomationStudio';
 import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
 import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash';
 import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript';
@@ -63,6 +64,7 @@ export default function Developer() {
   const [webhookEvents, setWebhookEvents] = useState(['*']);
   const [webhookBusy, setWebhookBusy] = useState(false);
   const [webhookMsg, setWebhookMsg] = useState(null);
+  const [automationDraft, setAutomationDraft] = useState(null);
   const navigate = useNavigate();
 
   // Session status comes from the shared store (socket-fed + cached), so this
@@ -264,6 +266,9 @@ export default function Developer() {
             <button onClick={() => setActiveSection('webhooks')} className={`flex items-center px-4 lg:px-3 py-2 lg:py-2.5 text-sm rounded-lg transition-colors lg:mt-4 ${activeSection === 'webhooks' ? (theme === 'dark' ? 'bg-indigo-500/10 text-indigo-400 font-medium' : 'bg-indigo-50 text-indigo-600 font-medium') : (theme === 'dark' ? 'text-slate-400 hover:bg-[#1e222b]' : 'text-slate-600 hover:bg-slate-100')}`}>
               <Webhook className="w-4 h-4 mr-2 lg:mr-3 shrink-0" /> Webhooks
             </button>
+            <button onClick={() => setActiveSection('automation')} className={`flex items-center px-4 lg:px-3 py-2 lg:py-2.5 text-sm rounded-lg transition-colors lg:mt-1 ${activeSection === 'automation' ? (theme === 'dark' ? 'bg-indigo-500/10 text-indigo-400 font-medium' : 'bg-indigo-50 text-indigo-600 font-medium') : (theme === 'dark' ? 'text-slate-400 hover:bg-[#1e222b]' : 'text-slate-600 hover:bg-slate-100')}`}>
+              <Zap className="w-4 h-4 mr-2 lg:mr-3 shrink-0" /> Automation
+            </button>
           </div>
         </div>
       </div>
@@ -279,6 +284,7 @@ export default function Developer() {
               <h1 className={`text-3xl sm:text-4xl font-extrabold tracking-tight ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>
                 {activeSection === 'auth' ? 'Authentication' : 
                  activeSection === 'webhooks' ? 'Webhooks' : 
+                 activeSection === 'automation' ? 'Automation Studio' : 
                  endpoints.find(e => e.id === activeSection)?.title}
               </h1>
               
@@ -415,6 +421,10 @@ export default function Developer() {
                   </div>
                 )}
 
+                {activeSection === 'automation' && (
+                  <AutomationStudio apiKey={apiKey} theme={theme} onDraftChange={setAutomationDraft} />
+                )}
+
                 {endpoints.map(ep => activeSection === ep.id && (
                   <div key={ep.id} className="space-y-8">
                     <p className={`text-lg leading-relaxed ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>
@@ -513,6 +523,35 @@ export default function Developer() {
             ) : activeSection === 'webhooks' ? (
               <div className="p-6">
                 <CodeBlock language="json" theme="dark" code={`// Delivered as POST to your URL (envelope + event payload)\n{\n  "id": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",\n  "event": "message.received",\n  "createdAt": "2026-09-14T10:30:00.000Z",\n  "data": {\n    "from": "2349034040635@c.us",\n    "body": "Hello, I need support!",\n    "timestamp": 1694678123,\n    "fromMe": false\n  }\n}\n\n// Signed deliveries add the header:\n// X-WPP-Signature: sha256=<HMAC-SHA256(secret, body)>\n\n// Create it with:\n// POST /api/v1/webhooks\n// {\n//   "url": "https://your-app.example.com/webhook/wppconnect",\n//   "events": ["message.received", "message.sent", "message.ack"],\n//   "secret": "optional-shared-secret"\n// }`} />
+              </div>
+            ) : activeSection === 'automation' ? (
+              <div className="p-6">
+                <CodeBlock language="json" theme="dark" code={automationDraft ? JSON.stringify(automationDraft, null, 2) : `// Rule JSON appears here as you build it.
+// Rules react to incoming messages only.
+{
+  "name": "Auto-reply to price inquiries",
+  "enabled": true,
+  "trigger": {
+    "event": "message.received",
+    "match": "all",
+    "conditions": [
+      { "field": "text", "op": "contains", "value": "price" }
+    ]
+  },
+  "action": {
+    "type": "send_text",
+    "text": "Thanks {name}! Prices are on our site.",
+    "quoted": true,
+    "delay": 0
+  }
+}
+
+// Also available via the API:
+// GET    /api/v1/automation            list rules
+// POST   /api/v1/automation            create a rule
+// PUT    /api/v1/automation/:id        update / toggle a rule
+// DELETE /api/v1/automation/:id        delete a rule
+// POST   /api/v1/automation/:id/test   dry-run a message match`} />
               </div>
             ) : (
               endpoints.map(ep => activeSection === ep.id && (
