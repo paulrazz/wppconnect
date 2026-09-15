@@ -143,6 +143,10 @@ class Session {
     // group message we normalize. Used to heal group display names in the
     // sidebar when the durable row holds a number or an old sender's name.
     this.groupNameCache = new Map();
+    // My own JID (e.g. "2348012345678@c.us"), cached once at login. Feeds the
+    // automation engine's "mentions me" / "quotes one of my messages" / "done
+    // by me" conditions without a per-event page round-trip.
+    this.myJid = null;
     this.passiveMode = true;
     this.deviceInfo = { battery: null, platform: null, network: null, apiStatus: 'Active', profileName: null, profilePic: null, updatedAt: null };
     this.metricsTimer = null;
@@ -380,6 +384,13 @@ class WhatsAppService {
       this.setStatus(session, 'CONNECTED');
       this.registerListeners(client, session);
       console.log(`WhatsApp session ready for ${session.apiKey.slice(0, 8)} (${session.sessionPath})`);
+      // Cache my own JID once per login (used by automation for mentions /
+      // quoted-mine / by-me conditions). Read-only, no socket traffic.
+      try {
+        session.myJid = await client.page.evaluate(() => {
+          try { const wid = window.WPP?.whatsapp?.UserPrefs?.getMaybeMeUser?.(); return wid ? String(wid) : null; } catch (_) { return null; }
+        }).catch(() => null) || null;
+      } catch (_) {}
       // Restore path: an already-paired profile relaunches the browser with no QR.
       // `waitForLogin:false` skips wppconnect's own login wait, so verify login
       // here (read-only) and surface CONNECTED. A fresh/unpaired profile stays in
@@ -431,6 +442,9 @@ class WhatsAppService {
         eventStore.rememberStatus(status);
         this.io?.to(`session_${session.apiKey}`).emit('new_status', status);
         void webhooks.emit('status.received', status);
+        // Automation: route the status with `from` fixed to the author so the
+        // reply target is the status author, never 'status@broadcast'.
+        void automation.handleEvent(session.apiKey, 'status.received', { ...status, from: message.author || message.from }, this);
         return;
       }
       if (message.fromMe || message.isSentByMe) {
@@ -451,6 +465,15 @@ class WhatsAppService {
       if (chatId) inboxStore.recordMessage(session.apiKey, chatId, message);
       // Trigger automation rules (may send replies, templates, orders, etc.)
       void automation.handleIncomingMessage(message, session.apiKey, this);
+      // A single incoming message can be a "mention" and/or a "quote" too.
+      // Dedicated triggers let the user react to those classes of messages
+      // without touching their `message.received` rules.
+      if (Array.isArray(message.mentionedJidList) && message.mentionedJidList.length) {
+        void automation.handleEvent(session.apiKey, 'message.mention', message, this);
+      }
+      if (message.quotedMsgId || message.quotedParticipant) {
+        void automation.handleEvent(session.apiKey, 'message.quote', message, this);
+      }
       void webhooks.emit('message.received', message);
     });
     client.onAck((ack) => {
@@ -466,6 +489,7 @@ class WhatsAppService {
         const removal = eventStore.append('status.deleted', { ...data, referenceId: eventStore.idOf(referenceId), original, recoveryStatus: exact ? 'recovered' : original ? 'probable-sender-match' : 'not-observed', deletedAt: new Date().toISOString() });
         this.io?.to(`session_${session.apiKey}`).emit('status_deleted', removal);
         void webhooks.emit('status.deleted', removal);
+        void automation.handleEvent(session.apiKey, 'status.deleted', removal.data, this);
         return;
       }
       const referenceId = data.refId || data.msgId || data.protocolMessageKey || data.id;
@@ -476,7 +500,12 @@ class WhatsAppService {
       if (original && (original.type === 'revoked' || (!original.body && !original.content && !original.caption && !original.filename && !original.mimetype))) original = null;
       const deletion = eventStore.append('message.deleted', { ...data, referenceId: eventStore.idOf(referenceId), original, recoveryStatus: original ? 'recovered' : 'not-observed', deletedAt: new Date().toISOString() });
       const delChatId = (original?.chatId?._serialized) || original?.chatId || deletion.data?.chatId?._serialized || deletion.data?.chatId || deletion.data?.from || null;
-      if (delChatId && String(delChatId) !== 'status@broadcast') inboxStore.recordDelete(session.apiKey, delChatId, deletion);
+      if (delChatId && String(delChatId) !== 'status@broadcast') {
+        inboxStore.recordDelete(session.apiKey, delChatId, deletion);
+        // Automation for deleted messages: include the chat it lived in and any
+        // group subject we know so rules can target specific chats/groups.
+        void automation.handleEvent(session.apiKey, 'message.deleted', { ...deletion.data, chatId: delChatId, chatName: (session.groupNameCache && typeof delChatId === 'string' && /@g\.us$/.test(delChatId)) ? session.groupNameCache.get(delChatId) || '' : '' }, this);
+      }
       this.io?.to(`session_${session.apiKey}`).emit('message_deleted', deletion);
       void webhooks.emit('message.deleted', deletion);
     });
@@ -507,11 +536,34 @@ class WhatsAppService {
       const reactionChatId = reactedRef?.chatId?._serialized || reactedRef?.chatId || reactedRef?.from || reactedRef?.to || null;
       if (reactionChatId) inboxStore.recordReaction(session.apiKey, reactionChatId, reaction.data);
       void webhooks.emit('message.reaction', reaction);
+      void automation.handleEvent(session.apiKey, 'message.reaction', {
+        msgId: msgIdStr,
+        reaction: data.reactionText || '',
+        reactionText: data.reactionText || '',
+        sender,
+        chatId: reactionChatId || null,
+        senderName: data.sender?.pushname || data.sender?.name || '',
+        contactName: data.sender?.name || data.sender?.formattedName || '',
+      }, this);
     });
     client.onIncomingCall((data) => {
       const call = eventStore.append('call.received', data);
       this.io?.to(`session_${session.apiKey}`).emit('incoming_call', call);
       void webhooks.emit('call.received', call);
+      void automation.handleEvent(session.apiKey, 'call.received', data, this);
+    });
+    client.onParticipantsChanged((event) => {
+      // Group join / leave / add / remove / promote / demote events.
+      void automation.handleEvent(session.apiKey, 'group.participant_changed', {
+        groupId: event.groupId,
+        by: event.by,
+        byPushName: event.byPushName,
+        action: event.action,
+        operation: event.operation,
+        who: event.who || [],
+        chatName: (session.groupNameCache && typeof event.groupId === 'string' && /@g\.us$/.test(event.groupId)) ? session.groupNameCache.get(event.groupId) || '' : '',
+        byMe: Boolean(session.myJid && event.by && event.by === session.myJid),
+      }, this);
     });
     client.onStateChange((state) => {
       console.log('WhatsApp state:', state);
@@ -583,6 +635,7 @@ class WhatsAppService {
     session.client = null;
     session.chatPreviewCache.clear();
     session.contactsCache = null;
+    session.myJid = null;
     // The global /chats TTL cache is keyed by apiKey - drop this tenant's
     // entry so logged-out sessions never linger in memory.
     this.chatsCache?.delete(apiKey);
@@ -619,6 +672,7 @@ class WhatsAppService {
     session.client = null;
     session.chatPreviewCache.clear();
     session.contactsCache = null;
+    session.myJid = null;
     // The global /chats TTL cache is keyed by apiKey - drop this tenant's
     // entry so logged-out sessions never linger in memory.
     this.chatsCache?.delete(apiKey);

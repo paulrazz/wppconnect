@@ -1,45 +1,137 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const eventStore = require('./event-store.service');
 
 // Per-tenant automation engine. Rules are stored as JSON on the persistent
 // volume (server/data/automation/<apiKeyHash>.json), so restarts and Railway
 // deploys keep their state. The playground in the Developer docs configures
-// these rules; this engine evaluates incoming messages against them and runs
-// the matched action (optionally after a delay), reusing the WhatsApp client
-// owned by whatsapp.service.js.
+// these rules; this engine evaluates live WhatsApp events against them and
+// runs the matched action (optionally after a delay), reusing the WhatsApp
+// client owned by whatsapp.service.js.
 
-const DATA_DIR = path.resolve(__dirname, '..', 'data', 'automation');
-const MAX_PATTERN_LENGTH = 512;
-const MAX_DELAY = 3600;
-const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
+// Trigger sources. The first derives from a chat message; the rest are their
+// own event streams (statuses, mentions, quotes, reactions, deletions, calls,
+// group membership changes).
+const EVENT_IDS = [
+  'message.received',
+  'message.quote',
+  'message.mention',
+  'message.reaction',
+  'message.deleted',
+  'status.received',
+  'status.deleted',
+  'call.received',
+  'group.participant_changed',
+];
 
-const EVENT_IDS = ['message.received'];
-
-const FIELDS = ['sender', 'chatId', 'isGroup', 'fromMe', 'text', 'hasMedia', 'mediaType', 'type'];
-
-const OPS_BY_FIELD = {
-  sender: ['equals', 'not_equals', 'contains', 'in', 'not_in'],
-  chatId: ['equals', 'not_equals', 'contains', 'starts_with', 'ends_with', 'in', 'not_in'],
-  isGroup: ['is_true', 'is_false'],
-  fromMe: ['is_true', 'is_false'],
-  text: ['contains', 'not_contains', 'equals', 'not_equals', 'starts_with', 'ends_with', 'matches_regex', 'in', 'not_in'],
-  hasMedia: ['is_true', 'is_false'],
-  mediaType: ['equals', 'not_equals', 'in', 'not_in'],
-  type: ['equals', 'not_equals', 'in', 'not_in'],
+const EVENT_LABELS = {
+  'message.received': 'A message is received',
+  'message.quote': 'A quoted / reply message is received',
+  'message.mention': 'A message that mentions someone is received',
+  'message.reaction': 'A message is reacted to',
+  'message.deleted': 'A message is deleted',
+  'status.received': 'A status is posted',
+  'status.deleted': 'A status is deleted',
+  'call.received': 'An incoming / missed call',
+  'group.participant_changed': 'Group members join, leave or are changed',
 };
 
-const BOOL_FIELDS = new Set(['isGroup', 'fromMe', 'hasMedia']);
+const EVENT_DESCRIPTIONS = {
+  'message.received': 'Runs for every incoming chat message.',
+  'message.quote': 'Runs when a message that quotes / replies to an earlier message arrives.',
+  'message.mention': 'Runs when a message that @-mentions someone arrives.',
+  'message.reaction': 'Runs when a reaction (emoji) is added to a message.',
+  'message.deleted': 'Runs when you are told a message was deleted (or you delete yours).',
+  'status.received': 'Runs when a contact posts a status update.',
+  'status.deleted': 'Runs when a status update disappears.',
+  'call.received': 'Runs on an incoming or missed voice / video call.',
+  'group.participant_changed': 'Runs when someone is added, removed, joins, leaves, or is promoted / demoted in a group you are in.',
+};
+
+// The condition fields that make sense for each trigger. Matching is verified
+// against this so a rule can never reference a field its event does not carry.
+const EVENT_FIELDS = {
+  'message.received': ['sender', 'senderName', 'contactName', 'chatId', 'groupName', 'isGroup', 'fromMe', 'text', 'hasMedia', 'mediaType', 'type', 'mentionsMe', 'isQuotingMe'],
+  'message.quote': ['sender', 'senderName', 'contactName', 'chatId', 'groupName', 'isGroup', 'fromMe', 'text', 'isQuotingMe', 'quotedText', 'mediaType', 'hasMedia'],
+  'message.mention': ['sender', 'senderName', 'contactName', 'chatId', 'groupName', 'isGroup', 'fromMe', 'text', 'mentionsMe', 'mediaType', 'hasMedia'],
+  'message.reaction': ['sender', 'senderName', 'contactName', 'chatId', 'groupName', 'isGroup', 'reaction'],
+  'message.deleted': ['sender', 'senderName', 'contactName', 'chatId', 'groupName', 'isGroup', 'fromMe', 'text', 'hasMedia', 'mediaType', 'recoveryStatus'],
+  'status.received': ['sender', 'senderName', 'contactName', 'text', 'hasMedia', 'mediaType', 'type'],
+  'status.deleted': ['sender', 'senderName', 'text', 'recoveryStatus'],
+  'call.received': ['sender', 'senderName', 'contactName', 'chatId', 'groupName', 'isGroup', 'callKind', 'isVideo', 'fromMe'],
+  'group.participant_changed': ['chatId', 'groupName', 'action', 'actor', 'participant', 'senderName', 'byMe'],
+};
+
+// Map every trigger to the default condition the builder starts with, so
+// switching triggers always produces a valid first condition.
+const EVENT_DEFAULT_CONDITION = (event) =>
+  event === 'message.reaction' ? { field: 'reaction', op: 'equals', value: '👍' } :
+  event === 'call.received' ? { field: 'callKind', op: 'equals', value: 'voice' } :
+  event === 'group.participant_changed' ? { field: 'action', op: 'equals', value: 'add' } :
+  event === 'message.quote' ? { field: 'isQuotingMe', op: 'is_true', value: true } :
+  event === 'message.mention' ? { field: 'mentionsMe', op: 'is_true', value: true } :
+  event === 'message.deleted' || event === 'status.deleted' ? { field: 'sender', op: 'equals', value: '' } :
+  event === 'status.received' ? { field: 'sender', op: 'equals', value: '' } :
+  event === 'message.received' ? { field: 'text', op: 'contains', value: '' } :
+  { field: 'sender', op: 'equals', value: '' };
+
+const FIELDS = ['sender', 'senderName', 'contactName', 'chatId', 'groupName', 'isGroup', 'fromMe', 'text', 'hasMedia', 'mediaType', 'type', 'mentionsMe', 'isQuotingMe', 'quotedText', 'reaction', 'action', 'actor', 'participant', 'byMe', 'callKind', 'isVideo', 'recoveryStatus'];
+
+const STRING_OPS = ['equals', 'not_equals', 'contains', 'in', 'not_in'];
+const TEXT_OPS = ['contains', 'not_contains', 'equals', 'not_equals', 'starts_with', 'ends_with', 'matches_regex', 'in', 'not_in'];
+const BOOL_OPS = ['is_true', 'is_false'];
+
+const OPS_BY_FIELD = {
+  sender: STRING_OPS,
+  senderName: STRING_OPS,
+  contactName: STRING_OPS,
+  chatId: ['equals', 'not_equals', 'contains', 'starts_with', 'ends_with', 'in', 'not_in'],
+  groupName: STRING_OPS,
+  isGroup: BOOL_OPS,
+  fromMe: BOOL_OPS,
+  text: TEXT_OPS,
+  hasMedia: BOOL_OPS,
+  mediaType: ['equals', 'not_equals', 'in', 'not_in'],
+  type: ['equals', 'not_equals', 'in', 'not_in'],
+  mentionsMe: BOOL_OPS,
+  isQuotingMe: BOOL_OPS,
+  quotedText: TEXT_OPS,
+  reaction: ['equals', 'not_equals', 'in', 'not_in'],
+  action: ['equals', 'not_equals', 'in', 'not_in'],
+  actor: STRING_OPS,
+  participant: ['equals', 'not_equals', 'contains', 'not_contains', 'in', 'not_in'],
+  byMe: BOOL_OPS,
+  callKind: ['equals', 'not_equals', 'in', 'not_in'],
+  isVideo: BOOL_OPS,
+  recoveryStatus: ['equals', 'not_equals', 'in', 'not_in'],
+};
+
+const BOOL_FIELDS = new Set(['isGroup', 'fromMe', 'hasMedia', 'mentionsMe', 'isQuotingMe', 'byMe', 'isVideo']);
 
 const FIELD_META = {
-  sender: { label: 'Sender', hint: 'WhatsApp ID of the sender, e.g. 2348012345678@c.us or 1234567890@g.us' },
-  chatId: { label: 'Chat / Group', hint: 'Chat or group ID the message arrived in' },
-  isGroup: { label: 'Is a group chat', hint: 'Matches when the message comes from a group' },
-  fromMe: { label: 'From my number', hint: 'Incoming messages are always from someone else' },
-  text: { label: 'Message text', hint: 'Body or caption of the message' },
+  sender: { label: 'Sender', hint: 'WhatsApp ID of the sender / actor, e.g. 2348012345678@c.us or 1234567890@g.us' },
+  senderName: { label: 'WhatsApp name', hint: 'Profile name the sender chose in WhatsApp' },
+  contactName: { label: 'Saved name', hint: 'The name you saved this contact under in your phone book' },
+  chatId: { label: 'Chat / Group', hint: 'Chat or group ID the event occurred in' },
+  groupName: { label: 'Group name', hint: 'Name / subject of the group' },
+  isGroup: { label: 'Is a group chat', hint: 'Matches when the event is from a group' },
+  fromMe: { label: 'From my number', hint: 'Matches events involving my own account' },
+  text: { label: 'Message text', hint: 'Body or caption of the message / status' },
   hasMedia: { label: 'Has media', hint: 'Matches when an image, video, audio, document or sticker is present' },
   mediaType: { label: 'Media type', hint: 'image, video, gif, audio, ptt, sticker or document' },
   type: { label: 'Message type', hint: 'The internal WhatsApp type, e.g. chat / image / vcard' },
+  mentionsMe: { label: 'Mentions me', hint: 'True when the message @-mentions my number' },
+  isQuotingMe: { label: 'Quotes one of my messages', hint: 'True when the reply quotes a message I sent' },
+  quotedText: { label: 'Quoted text', hint: 'The text of the message being quoted' },
+  reaction: { label: 'Reaction', hint: 'The emoji used for the reaction, e.g. 👍' },
+  action: { label: 'Member action', hint: 'add, remove, join, leaver, promote or demote' },
+  actor: { label: 'Actor', hint: 'WhatsApp ID of the person who performed the action' },
+  participant: { label: 'Affected members', hint: 'Comma-separated WhatsApp IDs of the members added / removed / promoted' },
+  byMe: { label: 'Done by me', hint: 'True when I performed the action' },
+  callKind: { label: 'Call type', hint: 'voice or video' },
+  isVideo: { label: 'Video call', hint: 'True for a video call' },
+  recoveryStatus: { label: 'Recovery status', hint: 'recovered, not-observed or probable-sender-match' },
 };
 
 const OP_META = {
@@ -64,7 +156,7 @@ const ACTION_META = {
     fields: [
       { name: 'text', label: 'Reply text', type: 'textarea', required: true },
       { name: 'quoted', label: 'Quote the received message', type: 'bool', default: true },
-      { name: 'delay', label: 'Delay (seconds)', type: 'number', min: 0, max: MAX_DELAY, default: 0 },
+      { name: 'delay', label: 'Delay (seconds)', type: 'number', min: 0, max: 3600, default: 0 },
     ],
   },
   send_media: {
@@ -74,40 +166,53 @@ const ACTION_META = {
       { name: 'filename', label: 'Filename', type: 'text' },
       { name: 'caption', label: 'Caption', type: 'textarea' },
       { name: 'quoted', label: 'Quote the received message', type: 'bool', default: true },
-      { name: 'delay', label: 'Delay (seconds)', type: 'number', min: 0, max: MAX_DELAY, default: 0 },
+      { name: 'delay', label: 'Delay (seconds)', type: 'number', min: 0, max: 3600, default: 0 },
     ],
   },
   send_reaction: {
     label: 'React with an emoji',
     fields: [
       { name: 'reaction', label: 'Emoji', type: 'text', required: true },
-      { name: 'delay', label: 'Delay (seconds)', type: 'number', min: 0, max: MAX_DELAY, default: 0 },
+      { name: 'delay', label: 'Delay (seconds)', type: 'number', min: 0, max: 3600, default: 0 },
     ],
   },
   forward_to: {
     label: 'Relay / forward to another chat',
     fields: [
       { name: 'to', label: 'Destination chat or number', type: 'text', required: true },
-      { name: 'delay', label: 'Delay (seconds)', type: 'number', min: 0, max: MAX_DELAY, default: 0 },
+      { name: 'delay', label: 'Delay (seconds)', type: 'number', min: 0, max: 3600, default: 0 },
     ],
   },
 };
 
 const PLACEHOLDERS = [
-  { token: '{name}', label: 'Contact name' },
+  { token: '{name}', label: 'WhatsApp profile name' },
+  { token: '{contactName}', label: 'Saved phone-book name' },
   { token: '{number}', label: 'Sender phone number' },
   { token: '{from}', label: 'Sender WhatsApp ID' },
   { token: '{chatId}', label: 'Chat / group ID' },
-  { token: '{text}', label: 'Received message text' },
+  { token: '{groupName}', label: 'Group name' },
+  { token: '{text}', label: 'Message text' },
+  { token: '{reaction}', label: 'Reaction emoji' },
   { token: '{mediaType}', label: 'Media type (image, video, …)' },
   { token: '{type}', label: 'Message type' },
   { token: '{time}', label: 'Local time' },
 ];
 
+const DATA_DIR = path.resolve(__dirname, '..', 'data', 'automation');
+const MAX_PATTERN_LENGTH = 512;
+const MAX_DELAY = 3600;
+const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 const MEDIA_TYPES = new Set(['image', 'video', 'gif', 'audio', 'ptt', 'sticker', 'document']);
 
 function hashApiKey(apiKey) {
   return crypto.createHash('sha256').update(String(apiKey || '')).digest('hex').slice(0, 32);
+}
+
+function idOf(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  return value?._serialized || value?.id || value?.user || '';
 }
 
 function toList(value) {
@@ -129,10 +234,13 @@ function badRequest(message) {
   return error;
 }
 
-function normalizeCondition(condition, index) {
+function normalizeCondition(condition, index, event) {
   if (!condition || typeof condition !== 'object') throw badRequest(`Condition #${index + 1} is invalid`);
   const field = condition.field;
   if (!FIELDS.includes(field)) throw badRequest(`Condition #${index + 1}: unknown field "${field}"`);
+  if (!(EVENT_FIELDS[event] || []).includes(field)) {
+    throw badRequest(`Condition #${index + 1}: field "${FIELD_META[field]?.label || field}" is not available for the "${EVENT_LABELS[event] || event}" trigger`);
+  }
   const op = condition.op;
   if (!validOperator(field, op)) throw badRequest(`Condition #${index + 1}: operator "${op}" is not valid for field "${field}"`);
   let value = condition.value;
@@ -204,7 +312,7 @@ function normalizeRule(body) {
   if (rawConditions.length > 10) throw badRequest('A rule may have at most 10 conditions');
 
   const match = body.trigger?.match === 'any' ? 'any' : 'all';
-  const conditions = rawConditions.map(normalizeCondition);
+  const conditions = rawConditions.map((condition, index) => normalizeCondition(condition, index, event));
   const action = normalizeAction(body.action || {});
 
   return {
@@ -221,49 +329,315 @@ function normalizeRule(body) {
 }
 
 function interpolate(template, ctx) {
+  const sender = ctx?.sender || ctx?.from || '';
   const values = {
-    name: ctx.senderName || '',
-    number: ctx.from.replace(/\D/g, ''),
-    from: ctx.from,
-    chatId: ctx.chatId,
-    text: ctx.text,
-    mediaType: ctx.mediaType || '',
-    type: ctx.type || '',
+    name: ctx?.senderName || '',
+    contactName: ctx?.contactName || '',
+    number: sender.replace(/\D/g, ''),
+    from: sender,
+    chatId: ctx?.chatId || '',
+    groupName: ctx?.groupName || '',
+    text: ctx?.text || '',
+    reaction: ctx?.reaction || '',
+    mediaType: ctx?.mediaType || '',
+    type: ctx?.type || '',
+    quotedText: ctx?.quotedText || '',
+    action: ctx?.action || '',
+    actor: ctx?.actor || '',
+    participant: ctx?.participant || '',
+    recoveryStatus: ctx?.recoveryStatus || '',
     time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
   };
-  return String(template || '').replace(/\{(name|number|from|chatId|text|mediaType|type|time)\}/g, (_, key) => values[key]);
+  return String(template || '').replace(/\{(name|contactName|number|from|chatId|groupName|text|reaction|mediaType|type|quotedText|action|actor|participant|recoveryStatus|time)\}/g, (_, key) => values[key]);
 }
 
-function resolveContext(message) {
-  const from = message?.from?._serialized || message?.from || message?.author?._serialized || message?.author || '';
-  const chatId = message?.chatId?._serialized || message?.chatId || message?.id?.remote?._serialized || '';
-  const body = String(message?.body ?? message?.caption ?? message?.content ?? '');
+// Contact name sources, arranged so the WhatsApp profile name and the saved
+// phone-book name can be resolved independently ({name} vs {contactName}).
+function senderNamesFrom(message) {
+  const ns = message || {};
+  const notify = ns.notifyName || ns.pushName || ns.sender?.pushname || ns.senderObj?.pushname || ns.senderName || '';
+  const saved = ns.contactName || ns.sender?.name || ns.sender?.formattedName || ns.senderObj?.name || ns.senderObj?.formattedName || '';
+  return {
+    senderName: notify || saved,
+    contactName: saved || notify,
+  };
+}
+
+function mentionedMe(message, selfId) {
+  const mentioned = (message?.mentionedJidList || []).map(idOf).filter(Boolean);
+  if (!mentioned.length) return false;
+  if (!selfId) return true; // self id unavailable: treat any mention as a likely mention of me
+  return mentioned.includes(selfId);
+}
+
+function quotesMe(message, selfId) {
+  const quotedId = idOf(message?.quotedMsgId);
+  const quotedOriginal = quotedId ? eventStore.getMessage(quotedId) : null;
+  if (quotedOriginal?.fromMe) return true;
+  const participant = idOf(message?.quotedParticipant);
+  return Boolean(selfId && participant && participant === selfId);
+}
+
+function resolveContext(message, overrides = {}) {
+  const source = message && typeof message === 'object' ? message : {};
+  let from = idOf(source?.from) || idOf(source?.author) || idOf(source?.sender?.id) || idOf(source?.senderObj) || overrides.from || '';
+  if (from === 'status@broadcast') from = idOf(source?.author) || from;
+  const chatId = overrides.chatId !== undefined
+    ? overrides.chatId
+    : (idOf(source?.chatId) || idOf(source?.to) || from);
+  const groupJid = /@g\.us$/.test(chatId) || /@g\.us$/.test(from);
+  const body = String(source?.body ?? source?.caption ?? source?.content ?? source?.text ?? overrides.text ?? '');
   const text = /^data:.+;base64,/.test(body) ? '' : body;
-  const type = String(message?.type || '').toLowerCase();
-  const mediaType = MEDIA_TYPES.has(type) ? type : '';
+  const type = String(overrides.type !== undefined ? overrides.type : (source?.type || '')).toLowerCase();
+  const mediaType = overrides.mediaType !== undefined
+    ? overrides.mediaType
+    : (MEDIA_TYPES.has(type) ? type : '');
+  const names = overrides.senderNames || senderNamesFrom(source);
   return {
     from,
+    sender: idOf(source?.author) || from,
     chatId,
+    isGroup: groupJid || idOf(source?.isGroupMsg) === 'true' || source?.isGroupMsg === true || source?.isGroup === true,
+    fromMe: source?.fromMe === true || source?.isSentByMe === true,
     text,
+    mediaType: String(mediaType || ''),
+    hasMedia: Boolean(mediaType) || source?.isMedia === true,
     type,
-    mediaType,
-    hasMedia: Boolean(mediaType),
-    isGroup: /@g\.us$/.test(from) || /@g\.us$/.test(chatId) || Boolean(message?.isGroupMsg),
-    fromMe: Boolean(message?.fromMe || message?.isSentByMe),
-    senderName: message?.sender?.formattedName || message?.senderObj?.formattedName || message?.pushName || message?.sender?.pushname || '',
+    senderName: names.senderName || '',
+    contactName: names.contactName || '',
+    groupName: overrides.groupName || source?.groupName || source?.chatName || '',
+    mentionsMe: overrides.mentionsMe !== undefined ? overrides.mentionsMe : mentionedMe(source, overrides.selfId || ''),
+    isQuotingMe: overrides.isQuotingMe !== undefined ? overrides.isQuotingMe : quotesMe(source, overrides.selfId || ''),
+    quotedText: overrides.quotedText || (() => {
+      const original = idOf(source?.quotedMsgId) ? eventStore.getMessage(idOf(source?.quotedMsgId)) : null;
+      return original ? String(original.body || original.caption || original.content || '') : '';
+    })(),
+    reaction: '',
+    action: '',
+    actor: '',
+    participant: '',
+    byMe: false,
+    callKind: '',
+    isVideo: false,
+    recoveryStatus: overrides.recoveryStatus || '',
   };
+}
+
+// Best-effort name resolution from the live session's caches (group subjects
+// and the contact list). Used for events that carry no sender object (calls,
+// reactions, group changes, deletions).
+function sessionLookup(whatsappService, apiKey, jid) {
+  const names = { senderName: '', contactName: '', groupName: '' };
+  const session = whatsappService?.getSession?.(apiKey);
+  if (!session) return names;
+  const clean = idOf(jid);
+  if (!clean) return names;
+  if (/@g\.us$/.test(clean)) names.groupName = session.groupNameCache?.get?.(clean) || '';
+  const contact = (session.contactsCache?.data || []).find(c => idOf(c.id) === clean);
+  if (contact) {
+    names.contactName = contact.name || contact.formattedName || contact.shortName || '';
+    names.senderName = contact.pushname || contact.notifyName || contact.formattedName || contact.name || '';
+  }
+  return names;
+}
+
+// Maps a raw event payload to a normalized condition/interpolation context.
+// Events that are message-shaped funnel through resolveContext; the rest build
+// their own context (with names filled in from the session when available).
+function buildContext(event, data, env = {}) {
+  const whatsappService = env.whatsappService;
+  const apiKey = env.apiKey;
+  const selfId = env.selfId || '';
+  const payload = data && typeof data === 'object' ? data : {};
+  const lookup = jid => sessionLookup(whatsappService, apiKey, jid);
+
+  if (['message.received', 'message.quote', 'message.mention'].includes(event)) {
+    return resolveContext(payload, { selfId });
+  }
+
+  if (event === 'message.deleted') {
+    const original = payload.original && typeof payload.original === 'object' ? payload.original : {};
+    const chatId = payload.chatId || idOf(original.chatId) || idOf(original.from) || idOf(payload.from);
+    const groupNames = /@g\.us$/.test(chatId) ? lookup(chatId) : {};
+    const ctx = resolveContext(original, {
+      selfId,
+      from: payload.from || idOf(original.author) || idOf(original.from),
+      chatId,
+      groupName: payload.chatName || groupNames.groupName,
+      senderNames: (() => {
+        const names = lookup(idOf(original.author) || original.from || original.sender);
+        const own = senderNamesFrom(original);
+        return {
+          senderName: own.senderName || names.senderName,
+          contactName: own.contactName || names.contactName,
+        };
+      })(),
+    });
+    ctx.recoveryStatus = payload.recoveryStatus || 'not-observed';
+    return ctx;
+  }
+
+  if (event === 'status.received') {
+    const ctx = resolveContext(payload, { selfId, chatId: 'status@broadcast' });
+    ctx.isGroup = false;
+    return ctx;
+  }
+
+  if (event === 'status.deleted') {
+    const original = payload.original && typeof payload.original === 'object' ? payload.original : {};
+    const sender = payload.author || payload.from || idOf(original.author) || idOf(original.from) || '';
+    const names = lookup(sender);
+    return {
+      from: sender,
+      sender,
+      chatId: 'status@broadcast',
+      isGroup: false,
+      fromMe: false,
+      text: original.body || original.caption || original.content || payload.text || '',
+      mediaType: '',
+      hasMedia: false,
+      type: 'status',
+      senderName: names.senderName || original.notifyName || '',
+      contactName: names.contactName,
+      groupName: '',
+      mentionsMe: false,
+      isQuotingMe: false,
+      quotedText: '',
+      reaction: '',
+      action: '',
+      actor: '',
+      participant: '',
+      byMe: false,
+      callKind: '',
+      isVideo: false,
+      recoveryStatus: payload.recoveryStatus || 'not-observed',
+    };
+  }
+
+  if (event === 'message.reaction') {
+    const reacted = payload.msgId ? eventStore.getMessage(idOf(payload.msgId)) : null;
+    const chatId = payload.chatId || idOf(reacted?.chatId) || idOf(reacted?.from) || '';
+    const sender = payload.sender || idOf(reacted?.author) || '';
+    const names = lookup(sender);
+    const groupNames = /@g\.us$/.test(chatId) ? lookup(chatId) : {};
+    return {
+      from: chatId,
+      sender,
+      chatId,
+      isGroup: /@g\.us$/.test(chatId),
+      fromMe: false,
+      text: payload.text || '',
+      mediaType: '',
+      hasMedia: false,
+      type: 'reaction',
+      senderName: payload.senderName || names.senderName,
+      contactName: payload.contactName || names.contactName,
+      groupName: groupNames.groupName || '',
+      mentionsMe: false,
+      isQuotingMe: false,
+      quotedText: '',
+      reaction: String(payload.reaction || payload.reactionText || ''),
+      action: '',
+      actor: '',
+      participant: '',
+      byMe: false,
+      callKind: '',
+      isVideo: false,
+      recoveryStatus: '',
+    };
+  }
+
+  if (event === 'call.received') {
+    const chatId = payload.groupJid || payload.peerJid || payload.from || '';
+    const sender = payload.peerJid || payload.from || idOf(payload.id);
+    const names = lookup(sender);
+    const groupNames = /@g\.us$/.test(chatId) ? lookup(chatId) : {};
+    return {
+      from: chatId,
+      sender,
+      chatId,
+      isGroup: Boolean(payload.isGroup) || /@g\.us$/.test(chatId),
+      fromMe: Boolean(payload.outgoing),
+      text: payload.text || '',
+      mediaType: '',
+      hasMedia: false,
+      type: 'call',
+      senderName: payload.senderName || names.senderName,
+      contactName: payload.contactName || names.contactName,
+      groupName: groupNames.groupName || payload.groupName || '',
+      mentionsMe: false,
+      isQuotingMe: false,
+      quotedText: '',
+      reaction: '',
+      action: '',
+      actor: '',
+      participant: '',
+      byMe: false,
+      callKind: payload.isVideo ? 'video' : 'voice',
+      isVideo: Boolean(payload.isVideo),
+      recoveryStatus: '',
+    };
+  }
+
+  if (event === 'group.participant_changed') {
+    const groupId = payload.groupId || payload.chatId || '';
+    const actor = payload.by || payload.actor || '';
+    const names = lookup(actor);
+    const groupNames = lookup(groupId);
+    return {
+      from: groupId,
+      sender: actor,
+      chatId: groupId,
+      isGroup: true,
+      fromMe: false,
+      text: payload.text || '',
+      mediaType: '',
+      hasMedia: false,
+      type: 'participant',
+      senderName: payload.byPushName || names.senderName,
+      contactName: names.contactName,
+      groupName: groupNames.groupName || payload.chatName || '',
+      mentionsMe: false,
+      isQuotingMe: false,
+      quotedText: '',
+      reaction: '',
+      action: payload.action || payload.operation || '',
+      actor,
+      participant: Array.isArray(payload.who) ? payload.who.join(', ') : String(payload.who || ''),
+      byMe: Boolean(payload.byMe) || Boolean(selfId && actor && actor === selfId),
+      callKind: '',
+      isVideo: false,
+      recoveryStatus: '',
+    };
+  }
+
+  return null;
 }
 
 function fieldValue(ctx, field) {
   switch (field) {
-    case 'sender': return ctx.from;
+    case 'sender': return ctx.sender || ctx.from;
+    case 'senderName': return ctx.senderName;
+    case 'contactName': return ctx.contactName;
     case 'chatId': return ctx.chatId;
-    case 'isGroup': return ctx.isGroup;
-    case 'fromMe': return ctx.fromMe;
-    case 'text': return ctx.text;
-    case 'hasMedia': return ctx.hasMedia;
-    case 'mediaType': return ctx.mediaType;
-    case 'type': return ctx.type;
+    case 'groupName': return ctx.groupName;
+    case 'isGroup': return ctx.isGroup === true;
+    case 'fromMe': return ctx.fromMe === true;
+    case 'text': return ctx.text || '';
+    case 'hasMedia': return ctx.hasMedia === true;
+    case 'mediaType': return ctx.mediaType || '';
+    case 'type': return ctx.type || '';
+    case 'mentionsMe': return ctx.mentionsMe === true;
+    case 'isQuotingMe': return ctx.isQuotingMe === true;
+    case 'quotedText': return ctx.quotedText || '';
+    case 'reaction': return ctx.reaction || '';
+    case 'action': return ctx.action || '';
+    case 'actor': return ctx.actor || '';
+    case 'participant': return ctx.participant || '';
+    case 'byMe': return ctx.byMe === true;
+    case 'callKind': return ctx.callKind || '';
+    case 'isVideo': return ctx.isVideo === true;
+    case 'recoveryStatus': return ctx.recoveryStatus || '';
     default: return undefined;
   }
 }
@@ -287,7 +661,7 @@ function matchValue(op, actual, expected) {
 }
 
 function evaluateRule(rule, ctx) {
-  const results = rule.trigger.conditions.map((condition) => {
+  const results = (rule.trigger.conditions || []).map((condition) => {
     const passed = matchValue(condition.op, fieldValue(ctx, condition.field), condition.value);
     return { ...condition, passed };
   });
@@ -312,6 +686,8 @@ async function resolveMediaSource(value) {
     clearTimeout(timer);
   }
 }
+
+const MESSAGE_EVENTS = new Set(['message.received', 'message.quote', 'message.mention']);
 
 class AutomationService {
   constructor() {
@@ -361,7 +737,7 @@ class AutomationService {
   list(apiKey) {
     const store = this._store(apiKey, false);
     if (!store) return [];
-    return store.rules.map(rule => ({ ...rule, trigger: 'message.received' }));
+    return store.rules;
   }
 
   get(apiKey, id) {
@@ -414,38 +790,56 @@ class AutomationService {
   testMatch(apiKey, id, sample = {}) {
     const rule = this.get(apiKey, id);
     if (!rule) return null;
-    const ctx = resolveContext({
-      from: sample.sender ? (String(sample.sender).includes('@') ? sample.sender : `${String(sample.sender).replace(/\D/g, '')}@c.us`) : '5550001111@c.us',
-      chatId: sample.chatId ? String(sample.chatId) : (String(sample.sender).includes('@g.us') ? String(sample.sender) : '2345550001111@c.us'),
+    const event = rule.trigger.event;
+    const sender = sample.sender != null && String(sample.sender).trim()
+      ? (String(sample.sender).includes('@') ? String(sample.sender) : `${String(sample.sender).replace(/\D/g, '')}@c.us`)
+      : '5550001111@c.us';
+    const data = {
+      from: sender,
+      author: sender,
+      chatId: sample.chatId || (String(sample.sender || '').includes('@g.us') ? String(sample.sender) : '2345550001111@c.us'),
       body: sample.text || '',
-      type: sample.hasMedia === false ? 'chat' : (sample.mediaType || 'chat'),
-    });
-    return evaluateRule(rule, ctx);
+      type: sample.hasMedia === false || sample.mediaType ? (sample.mediaType || 'chat') : 'chat',
+      ...(sample.event ? {} : sample),
+    };
+    const ctx = buildContext(event, data, {});
+    return ctx ? evaluateRule(rule, ctx) : { matched: false, conditions: [] };
   }
 
   // ---- Engine ----------------------------------------------------------
-  handleIncomingMessage(message, apiKey, whatsappService) {
+  // Entry point for every non-message event stream. Only rules whose trigger
+  // matches `event` are evaluated, so one message can fire received + mention
+  // + quote rules independently without cross-trigger interference.
+  async handleEvent(apiKey, event, data, whatsappService) {
+    if (!EVENT_IDS.includes(event)) return;
     const store = this._store(apiKey, false);
-    if (!store || !store.rules.length) return Promise.resolve();
-    const ctx = resolveContext(message);
+    if (!store || !store.rules.length) return;
+    const session = whatsappService?.getSession?.(apiKey);
+    const ctx = buildContext(event, data, { apiKey, whatsappService, selfId: session?.myJid || '' });
+    if (!ctx) return;
     let changed = false;
     for (const rule of store.rules) {
-      if (!rule.enabled) continue;
+      if (!rule.enabled || rule.trigger.event !== event) continue;
       const { matched } = evaluateRule(rule, ctx);
       if (!matched) continue;
       rule.runCount = (rule.runCount || 0) + 1;
       rule.lastRunAt = new Date().toISOString();
       changed = true;
-      this._schedule(apiKey, rule, ctx, message, whatsappService);
+      this._schedule(apiKey, rule, ctx, data, whatsappService);
     }
     if (changed) this._save(store);
-    return Promise.resolve();
   }
 
-  _schedule(apiKey, rule, ctx, message, whatsappService) {
+  // Backwards-compatible alias shipped on the message.received path. Kept so
+  // whatsapp.service.js keeps one obvious call site for chat messages.
+  handleIncomingMessage(message, apiKey, whatsappService) {
+    return this.handleEvent(apiKey, 'message.received', message, whatsappService);
+  }
+
+  _schedule(apiKey, rule, ctx, eventData, whatsappService) {
     const delay = Math.max(0, Math.min(Number(rule.action?.delay) || 0, MAX_DELAY));
     const run = () => {
-      this._execute(apiKey, rule, ctx, message, whatsappService).catch((error) => {
+      this._execute(apiKey, rule, ctx, eventData, whatsappService).catch((error) => {
         console.error(`[automation] Rule "${rule.name}" failed:`, error.message);
         this._emit(apiKey, { ruleId: rule.id, name: rule.name, status: 'error', actionType: rule.action?.type, error: error.message, at: new Date().toISOString() });
       });
@@ -462,11 +856,13 @@ class AutomationService {
     this.io?.to(`session_${apiKey}`).emit('automation_event', payload);
   }
 
-  async _execute(apiKey, rule, ctx, message, whatsappService) {
+  async _execute(apiKey, rule, ctx, eventData, whatsappService) {
     if (whatsappService?.io && !this.io) this.io = whatsappService.io;
     const action = rule.action;
-    const to = ctx.from;
-    const rawId = message?.id?._serialized || message?.id || (typeof message?.id === 'string' ? message.id : undefined);
+    const to = ctx.from || ctx.chatId;
+    const event = rule.trigger.event;
+    const rawMessage = MESSAGE_EVENTS.has(event) && eventData && typeof eventData === 'object' ? eventData : null;
+    const rawId = rawMessage?.id?._serialized || rawMessage?.id || (typeof rawMessage?.id === 'string' ? rawMessage?.id : undefined);
     const quotedId = rawId && (action.type === 'send_reaction' ? true : action.quoted) ? rawId : undefined;
 
     switch (action.type) {
@@ -480,21 +876,16 @@ class AutomationService {
       }
       case 'send_reaction':
         if (action.reaction && quotedId) await whatsappService.sendReaction(apiKey, quotedId, String(action.reaction).slice(0, 8));
+        else if (action.reaction && rawMessage?.id) await whatsappService.sendReaction(apiKey, idOf(rawMessage.id), String(action.reaction).slice(0, 8));
         break;
       case 'forward_to': {
         const dest = await whatsappService.resolveDestination(apiKey, action.to);
-        if (ctx.hasMedia) {
-          try {
-            const media = await whatsappService.downloadMedia(apiKey, rawId);
-            if (media?.dataUrl) {
-              await whatsappService.sendFile(apiKey, dest, media.dataUrl, media.filename || 'media', message?.caption || '');
-              break;
-            }
-          } catch (error) {
-            console.warn(`[automation] Media relay failed, falling back to text (${error.message})`);
-          }
+        const media = rawMessage ? await whatsappService.downloadMedia(apiKey, rawId).catch(() => null) : null;
+        if (ctx.hasMedia && media?.dataUrl) {
+          await whatsappService.sendFile(apiKey, dest, media.dataUrl, media.filename || 'media', ctx.text);
+        } else if (ctx.text) {
+          await whatsappService.sendMessage(apiKey, dest, ctx.text);
         }
-        if (ctx.text) await whatsappService.sendMessage(apiKey, dest, ctx.text);
         break;
       }
       default:
@@ -506,9 +897,15 @@ class AutomationService {
 
   spec() {
     return {
-      events: EVENT_IDS.map(id => ({ id, label: 'Message received' })),
+      events: EVENT_IDS.map(id => ({
+        id,
+        label: EVENT_LABELS[id] || id,
+        description: EVENT_DESCRIPTIONS[id] || '',
+        fields: EVENT_FIELDS[id] || [],
+        defaultCondition: EVENT_DEFAULT_CONDITION(id),
+      })),
       maxConditions: 10,
-      fields: FIELDS.map(field => ({ field, label: FIELD_META[field].label, hint: FIELD_META[field].hint })),
+      fields: FIELDS.map(field => ({ field, label: FIELD_META[field]?.label || field, hint: FIELD_META[field]?.hint || '' })),
       operators: OPS_BY_FIELD,
       operatorMeta: OP_META,
       actions: ACTION_TYPES.map(type => ({ type, label: ACTION_META[type].label, fields: ACTION_META[type].fields })),

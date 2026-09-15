@@ -23,6 +23,18 @@ const emptyDraft = () => ({
   action: { type: 'send_text', text: '', quoted: true, delay: 0 },
 });
 
+// Rules loaded from the API must always carry a usable trigger. A legacy/
+// malformed rule (e.g. `trigger` as a string) must never crash the page.
+const normalizeRule = (rule) => {
+  const trigger = rule?.trigger && typeof rule.trigger === 'object' && Array.isArray(rule.trigger.conditions)
+    ? rule.trigger
+    : { event: 'message.received', match: 'all', conditions: [] };
+  return {
+    ...rule,
+    trigger: { ...trigger, match: trigger.match === 'any' ? 'any' : 'all' },
+  };
+};
+
 function Chip({ active, tone = 'indigo', children }) {
   const tones = {
     indigo: active ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/40' : 'bg-[#0a0c10] text-slate-400 border-[#262931]',
@@ -84,7 +96,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
 
   const load = useCallback(() => {
     axios.get(`${SERVER_URL}/api/v1/automation`, { headers: { 'x-api-key': apiKey } })
-      .then(res => setRules(Array.isArray(res.data?.data) ? res.data.data : []))
+      .then(res => setRules((Array.isArray(res.data?.data) ? res.data.data : []).map(normalizeRule)))
       .catch(() => setRules([]));
     axios.get(`${SERVER_URL}/api/v1/automation/spec`, { headers: { 'x-api-key': apiKey } })
       .then(res => setSpec(res.data?.data))
@@ -97,7 +109,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
   }, [onDraftChange, draft]);
 
   const startNew = () => { setEditingId(null); setDraft(emptyDraft()); setMsg(null); };
-  const startEdit = (rule) => { setEditingId(rule.id); setDraft(JSON.parse(JSON.stringify(rule))); setMsg(null); };
+  const startEdit = (rule) => { setEditingId(rule.id); setDraft(normalizeRule(JSON.parse(JSON.stringify(rule)))); setMsg(null); };
 
   const patchDraft = (patch) => setDraft(prev => ({ ...(prev || emptyDraft()), ...patch }));
   const patchTrigger = (patch) => setDraft(prev => ({ ...prev, trigger: { ...prev.trigger, ...patch } }));
@@ -108,10 +120,11 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
     return { ...prev, trigger: { ...prev.trigger, conditions } };
   });
 
-  const addCondition = () => setDraft(prev => ({
-    ...prev,
-    trigger: { ...prev.trigger, conditions: [...prev.trigger.conditions, { field: 'text', op: 'contains', value: '' }] },
-  }));
+  const addCondition = () => setDraft(prev => {
+    const meta = spec?.events?.find(e => e.id === prev.trigger.event);
+    const condition = meta?.defaultCondition || prev.trigger.conditions[prev.trigger.conditions.length - 1] || { field: 'sender', op: 'equals', value: '' };
+    return { ...prev, trigger: { ...prev.trigger, conditions: [...prev.trigger.conditions, { ...condition, value: typeof condition.value === 'boolean' ? false : '' }] } };
+  });
 
   const removeCondition = (index) => setDraft(prev => ({
     ...prev,
@@ -131,11 +144,11 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
     try {
       if (editingId) {
         const res = await axios.put(`${SERVER_URL}/api/v1/automation/${editingId}`, draft, { headers: { 'x-api-key': apiKey } });
-        setRules(prev => prev.map(r => (r.id === editingId ? res.data?.data : r)));
+        setRules(prev => prev.map(r => (r.id === editingId ? normalizeRule(res.data?.data) : r)));
         setMsg({ ok: true, text: 'Rule updated.' });
       } else {
         const res = await axios.post(`${SERVER_URL}/api/v1/automation`, draft, { headers: { 'x-api-key': apiKey } });
-        setRules(prev => [...prev, res.data?.data]);
+        setRules(prev => [...prev, normalizeRule(res.data?.data)]);
         setMsg({ ok: true, text: 'Rule created. It fires on matching incoming messages now.' });
       }
       setDraft(null);
@@ -150,7 +163,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
   const toggleRule = async (rule) => {
     try {
       const res = await axios.put(`${SERVER_URL}/api/v1/automation/${rule.id}`, { enabled: !rule.enabled }, { headers: { 'x-api-key': apiKey } });
-      setRules(prev => prev.map(r => (r.id === rule.id ? res.data?.data : r)));
+      setRules(prev => prev.map(r => (r.id === rule.id ? normalizeRule(res.data?.data) : r)));
     } catch (err) {
       setMsg({ ok: false, text: err.response?.data?.error || err.message });
     }
@@ -181,7 +194,14 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
   const openTest = (rule) => setTesting(prev => (prev.id === rule.id ? { id: null, busy: false, result: null, text: '', sender: '' } : { id: rule.id, busy: false, result: null, text: '', sender: prev.text && prev.id === rule.id ? prev.text : '' }));
 
   const actionMeta = spec?.actions?.find(a => a.type === draft?.action?.type);
-  const isBoolField = (field) => ['isGroup', 'hasMedia', 'fromMe'].includes(field);
+  const isBoolField = (field) => spec?.operators?.[field]?.includes('is_true') || false;
+  const eventMeta = spec?.events?.find(e => e.id === draft?.trigger?.event);
+  const eventFields = (eventMeta?.fields || []).map(id => spec?.fields?.find(f => f.field === id)).filter(Boolean);
+  const switchEvent = (event) => {
+    const meta = spec.events.find(e => e.id === event);
+    const condition = meta?.defaultCondition || { field: 'sender', op: 'equals', value: '' };
+    patchTrigger({ event, conditions: [condition] });
+  };
 
   if (!spec) {
     return (
@@ -194,9 +214,9 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
   return (
     <div className="space-y-8">
       <p className={`text-lg leading-relaxed ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>
-        Build auto-replies and actions from conditions — “when a message matches, do this”. Rules react to
-        incoming messages only, so a rule never replies to its own replies. Each rule is stored per API key and
-        survives restarts.
+        Build automations from triggers and conditions — “when this happens, do that”. Rules can react to incoming
+        messages, mentions, quotes, reactions, deletions, statuses, missed calls and group member changes. Each rule
+        is stored per API key and survives restarts.
       </p>
 
       {msg && (
@@ -273,7 +293,11 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
                     <div className="mt-1.5 flex flex-col gap-1">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className={`text-[10px] font-bold uppercase tracking-wide ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>When</span>
-                        {rule.trigger.conditions.map((c, i) => (
+                        {rule.trigger.conditions.length === 0 ? (
+                          <span className={`text-xs italic ${theme === 'dark' ? 'text-slate-600' : 'text-slate-400'}`}>
+                            {rule.trigger.event === 'message.received' ? 'Any incoming message' : (spec.events.find(e => e.id === rule.trigger.event)?.label || rule.trigger.event)}
+                          </span>
+                        ) : rule.trigger.conditions.map((c, i) => (
                           <span key={i} className="flex items-center gap-1.5">
                             {i > 0 && (
                               <span className={`text-[10px] font-black uppercase ${rule.trigger.match === 'all' ? 'text-indigo-400' : 'text-amber-400'}`}>{rule.trigger.match === 'all' ? 'AND' : 'OR'}</span>
@@ -302,7 +326,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
                     {testing.id === rule.id && (
                       <div className={`mt-3 pt-3 border-t ${theme === 'dark' ? 'border-[#1e222b]' : 'border-slate-200'}`}>
                         <p className={`text-[10px] font-bold uppercase tracking-wide mb-2 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
-                          Simulate an incoming message (the action is <span className="text-indigo-400">not</span> executed)
+                          Simulate this trigger (the action is <span className="text-indigo-400">not</span> executed)
                         </p>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           <input
@@ -386,9 +410,18 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
 
             {/* WHEN */}
             <div className="mb-5">
-              <div className={`flex items-center rounded-t-xl border-t border-x px-4 py-2 ${theme === 'dark' ? 'border-[#262931] bg-[#0f1115] text-slate-300' : 'border-slate-300 bg-slate-100 text-slate-700'}`}>
-                <span className="text-[10px] font-black uppercase tracking-wider mr-3 text-indigo-400">When</span>
-                <span className="text-sm">a message is received</span>
+              <div className={`flex items-center flex-wrap gap-2 rounded-t-xl border-t border-x px-4 py-2 ${theme === 'dark' ? 'border-[#262931] bg-[#0f1115] text-slate-300' : 'border-slate-300 bg-slate-100 text-slate-700'}`}>
+                <span className="text-[10px] font-black uppercase tracking-wider mr-1 text-indigo-400">When</span>
+                <select
+                  value={draft.trigger.event}
+                  onChange={e => switchEvent(e.target.value)}
+                  className={`rounded-lg border text-sm font-semibold px-2 py-1.5 outline-none focus:ring-2 focus:ring-indigo-500/50 ${theme === 'dark' ? 'bg-[#0a0c10] border-[#262931] text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-800'}`}
+                >
+                  {spec.events.map(ev => <option key={ev.id} value={ev.id}>{ev.label}</option>)}
+                </select>
+                {eventMeta?.description && (
+                  <span className={`text-xs ml-auto ${theme === 'dark' ? 'text-slate-500' : 'text-slate-500'}`}>{eventMeta.description}</span>
+                )}
               </div>
               <div className={`rounded-b-xl border overflow-hidden ${theme === 'dark' ? 'border-[#262931]' : 'border-slate-300'}`}>
                 <div className="space-y-2 p-4">
@@ -406,7 +439,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
                         }}
                         className={`rounded-lg border text-sm px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-500/50 ${theme === 'dark' ? 'bg-[#0a0c10] border-[#262931] text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-800'}`}
                       >
-                        {spec.fields.map(f => <option key={f.field} value={f.field}>{f.label}</option>)}
+                        {eventFields.map(f => <option key={f.field} value={f.field}>{f.label}</option>)}
                       </select>
                       <select
                         value={condition.op}
@@ -589,7 +622,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
               {(spec.placeholders || []).length > 0 && (
                 <span className={`hidden lg:flex items-center gap-1 text-[10px] ml-auto ${theme === 'dark' ? 'text-slate-600' : 'text-slate-400'}`}>
                   <Sparkles className="w-3 h-3 text-amber-400" />
-                  Rules run on incoming messages only — no reply loops.
+                  Message rules never reply to their own replies — no loops.
                 </span>
               )}
             </div>
