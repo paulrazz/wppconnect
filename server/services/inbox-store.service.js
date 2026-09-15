@@ -155,11 +155,15 @@ class InboxStore {
   }
 
   // One-time import of data written by the earlier JSONL inbox layout, so
-  // nothing recorded so far is lost after this upgrade. Finished folders were
-  // renamed to `*.legacy`; those are re-imported only when the key's baseline
-  // is missing (i.e. a reset/stranded volume where SQLite lost its rows). A
-  // folder is deleted only after its import fully succeeds - SQLite is the
-  // canonical store, the JSONL layout is the redundant leftover.
+  // nothing recorded so far is lost after this upgrade. Folders may be plain
+  // or already-renamed `*.legacy`; the latter are re-imported only when the
+  // key's baseline is missing (i.e. a reset/stranded volume where SQLite lost
+  // its rows). Some old folders have no meta.json at all (their JSONL-era
+  // bootstrap also hit the WAPI race) - those are attributed via the reverse
+  // sha256 lookup against registered api_keys and started_at is derived from
+  // the earliest imported message. A folder is deleted only after its import
+  // fully succeeds - SQLite is the canonical store, the JSONL layout is the
+  // redundant leftover.
   async migrateLegacy() {
     const root = path.resolve(__dirname, '..', 'data', 'inbox');
     let entries;
@@ -170,15 +174,24 @@ class InboxStore {
       try { stat = fs.statSync(dir); } catch (_) { continue; }
       if (!stat.isDirectory()) continue;
       const folder = String(entry);
-      const isLegacy = folder.endsWith('.legacy');
+      const folderId = folder.endsWith('.legacy') ? folder.replace(/\.legacy$/, '') : folder;
       try {
-        const meta = parseJson(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'), {});
-        if (!meta.apiKey) { console.warn('Inbox legacy folder has no api_key, skipping:', folder); continue; }
-        if (isLegacy) {
+        let meta = {};
+        try { meta = parseJson(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'), {}); } catch (_) { /* Some old folders never wrote a meta.json. */ }
+        let hadMeta = Boolean(meta.startedAt);
+        if (!meta.apiKey) {
+          // No meta.json (JSONL-era bootstrap never completed). The folder name
+          // is sha256(apiKey).slice(0,32): recover the key from the registered
+          // users so chats.json / messages/*.jsonl can still be imported.
+          const keys = await DB.all('SELECT api_key FROM users');
+          meta.apiKey = keys.map(row => row.api_key).find(k => crypto.createHash('sha256').update(String(k || '')).digest('hex').substring(0, 32) === folderId) || null;
+        }
+        if (!meta.apiKey) { console.warn('Inbox legacy folder could not be attributed, skipping:', folder); continue; }
+        if (folder.endsWith('.legacy')) {
           const existing = await DB.get('SELECT started_at FROM inbox_meta WHERE api_key=?', [meta.apiKey]);
           if (existing?.started_at) continue; // already imported, nothing to recover
         }
-        await this.importLegacyFolder(meta, dir);
+        await this.importLegacyFolder(meta, dir, hadMeta);
         fs.rmSync(dir, { recursive: true, force: true });
         console.log(`Inbox legacy data imported to SQLite (${meta.apiKey.slice(0, 8)}) and removed`);
       } catch (error) {
@@ -187,7 +200,7 @@ class InboxStore {
     }
   }
 
-  async importLegacyFolder(meta, dir) {
+  async importLegacyFolder(meta, dir, hadMeta) {
     await DB.run(`INSERT INTO inbox_meta (api_key, started_at, last_boot_at, updated_at) VALUES (?,?,?,?)
       ON CONFLICT(api_key) DO UPDATE SET updated_at=excluded.updated_at`,
       [meta.apiKey, new Date(meta.startedAt || Date.now()).getTime(), Date.now(), Date.now()]);
@@ -247,6 +260,11 @@ class InboxStore {
         await DB.run('ROLLBACK').catch(() => {});
         throw transactionError;
       }
+    }
+    // Without a meta.json the folder never recorded a startedAt; pin the
+    // "saved since" date to the earliest message the import recovered.
+    if (!hadMeta) {
+      await DB.run('UPDATE inbox_meta SET started_at = COALESCE((SELECT MIN(stored_at) FROM inbox_messages WHERE api_key=?), started_at) WHERE api_key=?', [meta.apiKey, meta.apiKey]);
     }
   }
 
