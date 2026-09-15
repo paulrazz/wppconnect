@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import axios from 'axios';
 import { getApiKey } from '../auth';
 import liveStream from '../liveStream';
@@ -33,6 +33,44 @@ const REACTION_EMOJIS = ['👍', '❤️', '😂', '😢', '🙏', '🎉'];
 // The canonical (non "_out") id - matches what WhatsApp/our API emit reactions under.
 const canonicalId = (m) => (msgId(m) || '').replace(/_out$/, '');
 
+// Client-side media blob cache. The server already caches resolved media on
+// disk, but caching the final dataUrl here avoids re-transferring large blobs
+// (and re-decoding) every time a bubble remounts — chat switches, back-and-
+// forth navigation, and bubble re-renders. Keyed per tenant apiKey + message
+// id so one account can never see another's media. Bounded FIFO/pseudo-LRU so
+// memory stays flat even on very busy inboxes.
+const mediaCache = new Map();    // `${apiKey}:${id}` -> { dataUrl, ... }
+const mediaInflight = new Map(); // `${apiKey}:${id}` -> in-flight Promise
+const MEDIA_CACHE_MAX = 300;
+
+function cacheMediaData(cacheKey, data) {
+  mediaCache.delete(cacheKey); // re-insert to refresh recency (pseudo LRU)
+  mediaCache.set(cacheKey, data);
+  if (mediaCache.size > MEDIA_CACHE_MAX) {
+    const oldest = mediaCache.keys().next().value;
+    if (oldest !== undefined) mediaCache.delete(oldest);
+  }
+}
+
+function fetchMedia(id, apiKey) {
+  const cacheKey = `${apiKey}:${id}`;
+  if (mediaCache.has(cacheKey)) return Promise.resolve(mediaCache.get(cacheKey));
+  if (!mediaInflight.has(cacheKey)) {
+    mediaInflight.set(
+      cacheKey,
+      axios
+        .get(`${API_URL}/media/${encodeURIComponent(id)}`, { headers: { 'x-api-key': apiKey } })
+        .then((res) => {
+          const data = res.data;
+          cacheMediaData(cacheKey, data);
+          return data;
+        })
+        .finally(() => mediaInflight.delete(cacheKey))
+    );
+  }
+  return mediaInflight.get(cacheKey);
+}
+
 // Lazily fetches/downloads a message's media payload from the API (cached per message).
 function MediaContent({ message, apiKey, theme }) {
   const [data, setData] = useState(null);
@@ -46,8 +84,8 @@ function MediaContent({ message, apiKey, theme }) {
     let alive = true;
     setError(null);
     const id = (msgId(message) || '').replace(/_out$/, '');
-    axios.get(`${API_URL}/media/${encodeURIComponent(id)}`, { headers: { 'x-api-key': apiKey } })
-      .then(res => { if (alive) setData(res.data); })
+    fetchMedia(id, apiKey)
+      .then(data => { if (alive) setData(data); })
       .catch(err => { if (alive) setError(err?.response?.status || err?.message || 'error'); });
     return () => { alive = false; };
   }, [message, apiKey, attempts]);
@@ -210,6 +248,9 @@ export default function LiveInbox() {
   const [earlier, setEarlier] = useState({});
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const messagesEndRef = useRef(null);
+  const scrollBoxRef = useRef(null);
+  const nearBottomRef = useRef(true);
+  const lastMsgIdRef = useRef({}); // chatId -> newest live message id seen
   const loadingHistoryRef = useRef(null);
   const listLoadedRef = useRef(false);
   const searchTimerRef = useRef(null);
@@ -327,9 +368,38 @@ export default function LiveInbox() {
   // route back to their canonical chatId bucket.
   useEffect(() => () => liveStream.setActiveChat(null), []);
 
+  // Track whether the user is reading near the latest message. When they have
+  // scrolled up to read history, new messages must never yank them back down.
+  const handleMessagesScroll = () => {
+    const el = scrollBoxRef.current;
+    if (!el) return;
+    nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  };
+
+  // Jump to the latest message when a chat is opened (or re-opened).
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [liveVersion, activeChatId]);
+    if (!activeChatId) return;
+    lastMsgIdRef.current[activeChatId] = null;
+    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    nearBottomRef.current = true;
+  }, [activeChatId]);
+
+  // Follow new messages ONLY for the chat currently in view, and only while
+  // the user is already near the bottom. A message landing in any other chat
+  // (which today bumps the same global liveVersion) must not scroll this chat.
+  // Comparing the newest message id - not length - also means loading earlier
+  // history (which prepends) and reaction/delete updates never trigger a jump.
+  useEffect(() => {
+    if (!activeChatId) return;
+    const messages = liveChats[activeChatId]?.messages;
+    const newest = messages?.[messages.length - 1];
+    const newestId = newest ? msgId(newest) : null;
+    const previous = lastMsgIdRef.current[activeChatId] ?? null;
+    lastMsgIdRef.current[activeChatId] = newestId ?? previous;
+    if (newestId && newestId !== previous && nearBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [liveVersion, activeChatId, liveChats]);
 
   const openChat = (chatId) => {
     setActiveChatId(chatId);
@@ -433,8 +503,11 @@ export default function LiveInbox() {
     return chatId.split('@')[0];
   };
 
-  // Merge API chat list (with last-message subtitles) + live chats into one sorted sidebar.
-  const sidebar = (() => {
+  // Merge API chat list (with last-message subtitles) + live chats into one
+  // sorted sidebar. Memoized so pure local-state churn (typing in search,
+  // toggling a reply, sending) does not rebuild + sort the whole list every
+  // render; it recomputes on the live version bump and list/contact changes.
+  const sidebar = useMemo(() => {
     const map = {};
     apiChats.forEach(c => { map[c.id] = { ...c }; });
     Object.entries(liveChats).forEach(([chatId, { messages }]) => {
@@ -443,7 +516,7 @@ export default function LiveInbox() {
       if (last) map[chatId] = { ...map[chatId], lastMessage: { ...last, timestamp: last.timestamp || 0 } };
     });
     return Object.values(map).sort((a, b) => (b.lastMessage?.timestamp || 0) - (a.lastMessage?.timestamp || 0));
-  })();
+  }, [apiChats, liveChats, liveVersion, contacts]);
 
   if (sessionStatus !== 'CONNECTED') {
     return (
@@ -606,7 +679,7 @@ export default function LiveInbox() {
             </div>
 
             {/* Chat Messages */}
-            <div className={`flex-1 overflow-y-auto p-6 flex flex-col gap-4 ${theme === 'dark' ? 'bg-[#0a0c10]' : 'bg-slate-50'}`}>
+            <div ref={scrollBoxRef} onScroll={handleMessagesScroll} className={`flex-1 overflow-y-auto p-6 flex flex-col gap-4 ${theme === 'dark' ? 'bg-[#0a0c10]' : 'bg-slate-50'}`}>
               {!activeChatData || activeChatData.messages.length === 0 ? (
                 <div className={`flex-1 flex flex-col items-center justify-center text-center p-8 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
                   <MessageSquare className="w-10 h-10 mb-3 opacity-40" />

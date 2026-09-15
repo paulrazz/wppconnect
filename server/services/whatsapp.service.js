@@ -511,6 +511,9 @@ class WhatsAppService {
     session.client = null;
     session.chatPreviewCache.clear();
     session.contactsCache = null;
+    // The global /chats TTL cache is keyed by apiKey - drop this tenant's
+    // entry so logged-out sessions never linger in memory.
+    this.chatsCache?.delete(apiKey);
 
     if (client) {
       console.log(`[Memory Manager] Forcefully terminating Chromium process for session ${session.sessionName}...`);
@@ -544,6 +547,9 @@ class WhatsAppService {
     session.client = null;
     session.chatPreviewCache.clear();
     session.contactsCache = null;
+    // The global /chats TTL cache is keyed by apiKey - drop this tenant's
+    // entry so logged-out sessions never linger in memory.
+    this.chatsCache?.delete(apiKey);
     if (client) await client.logout();
     session.connectedAt = null;
     this.setStatus(session, 'DISCONNECTED');
