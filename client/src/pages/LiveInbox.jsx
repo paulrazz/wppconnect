@@ -39,19 +39,27 @@ function MediaContent({ message, apiKey, theme }) {
   const [unavailable, setUnavailable] = useState(false);
   const type = String(message.type || '').toLowerCase();
 
+  const [error, setError] = useState(null);
+  const [attempts, setAttempts] = useState(0);
+
   useEffect(() => {
     let alive = true;
+    setError(null);
     axios.get(`${API_URL}/media/${encodeURIComponent(String(msgId(message)))}`, { headers: { 'x-api-key': apiKey } })
       .then(res => { if (alive) setData(res.data); })
-      .catch(() => { if (alive) setUnavailable(true); });
+      .catch(err => { if (alive) setError(err?.response?.status || err?.message || 'error'); });
     return () => { alive = false; };
-  }, [message, apiKey]);
+  }, [message, apiKey, attempts]);
 
-  if (unavailable) {
+  if (error) {
     return (
-      <p className={`text-xs italic ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+      <p
+        className={`text-xs italic cursor-pointer ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}
+        title={`Content request failed (${error}). Click to retry.`}
+        onClick={() => setAttempts(a => a + 1)}
+      >
         {type === 'video' || type === 'gif' ? '🎥 ' : type === 'audio' || type === 'ptt' ? '🎵 ' : type === 'sticker' ? '' : '📄 '}
-        Media no longer available
+        Media no longer available <span className="opacity-60">({error})</span>
       </p>
     );
   }
