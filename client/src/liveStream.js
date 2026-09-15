@@ -84,7 +84,9 @@ const pushMessage = (message, targetId) => {
       if (changed) notify();
     });
 
-    socket.on('message_reaction', (data) => {
+    socket.on('message_reaction', (raw) => {
+      // Accept both the envelope (legacy) and the normalized object (current).
+      const data = raw?.data || raw;
       const rawTarget = data.msgId?._serialized || data.msgId?.id || data.msgId;
       if (!rawTarget) return;
       // Reactions are always keyed by the canonical parent message key, while
@@ -100,6 +102,25 @@ const pushMessage = (message, targetId) => {
       }
       reactions[targetId] = list;
       notify();
+    });
+
+    socket.on('message_deleted', (raw) => {
+      const d = raw?.data || raw;
+      const refRaw = d.referenceId || d.refId || d.msgId || d.id || d.original?.id;
+      const refId = (refRaw?._serialized || refRaw?.id || refRaw || '').replace(/_out$/, '');
+      if (!refId) return;
+      let changed = false;
+      for (const chatId of Object.keys(chats)) {
+        for (const m of chats[chatId].messages) {
+          if ((msgId(m) || '').replace(/_out$/, '') === refId && !m.isDeleted) {
+            m.isDeleted = true;
+            m.isRevoked = true;
+            m.deleted = true;
+            changed = true;
+          }
+        }
+      }
+      if (changed) notify();
     });
 
     socket.on('session_status', (status) => sessionStore.setStatus(status));

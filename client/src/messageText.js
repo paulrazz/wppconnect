@@ -28,7 +28,7 @@ const MEDIA_LABELS = {
   vcard: '👤 Contact',
   contact: '👤 Contact',
   contact_card: '👤 Contact',
-  revoked: '🚫 Message deleted',
+  revoked: '🚫',
 };
 
 export const messagePreview = (message) => {

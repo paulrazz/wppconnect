@@ -44,7 +44,7 @@ function messagePreview(message) {
   }[type];
   if (media) return text ? `${media}: ${text}` : media;
   if (type.includes('call')) return `${message.isMissed || type.includes('missed') ? 'Missed' : 'WhatsApp'} ${message.isVideoCall || type.includes('video') ? 'video' : 'voice'} call`;
-  if (type === 'revoked' || message.isDeleted || message.isRevoked) return text ? `${text} 🚫` : '🚫 Message deleted';
+  if (type === 'revoked' || message.isDeleted || message.isRevoked) return text ? `🚫 ${text}` : '🚫';
   if (type.startsWith('poll')) return `📊 ${message.pollName || message.poll?.name || text || 'Poll'}`;
   if (['buttons_response', 'list_response', 'template_button_reply', 'interactive_response'].includes(type)) return `↩️ ${text || 'Interactive response'}`;
   if (['buttons', 'template_button', 'interactive'].includes(type)) return `🔘 ${text || 'Interactive message'}`;
@@ -423,7 +423,7 @@ class WhatsAppService {
         timestamp: data.timestamp || data.t || Date.now(),
         sender,
       });
-      this.io?.to(`session_${session.apiKey}`).emit('message_reaction', reaction);
+      this.io?.to(`session_${session.apiKey}`).emit('message_reaction', reaction.data);
       const reactedRef = eventStore.getMessage(probe);
       const reactionChatId = reactedRef?.chatId?._serialized || reactedRef?.chatId || reactedRef?.from || reactedRef?.to || null;
       if (reactionChatId) inboxStore.recordReaction(session.apiKey, reactionChatId, reaction.data);
@@ -625,10 +625,11 @@ class WhatsAppService {
           const isDel = Boolean(lastMessage.isDeleted || lastMessage.isRevoked || String(lastMessage.type || '').toLowerCase() === 'revoked');
           const original = isDel && eventStore.idOf(lastMessage.id) ? eventStore.getMessage(eventStore.idOf(lastMessage.id)) : null;
           const display = original || lastMessage;
+          const displayText = safeMessageText(display);
           return {
             id: original?.id || lastMessage.id,
-            body: compactPreview(safeMessageText(display)),
-            previewText: compactPreview(messagePreview(display)),
+            body: compactPreview(displayText),
+            previewText: compactPreview(isDel ? (displayText ? `🚫 ${displayText}` : '🚫') : messagePreview(display)),
             type: display.type || lastMessage.type || 'chat',
             timestamp: display.timestamp || display.t || lastMessage.timestamp || lastMessage.t || chat.t,
             fromMe: Boolean(display.fromMe || lastMessage.fromMe),

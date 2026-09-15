@@ -119,28 +119,25 @@ function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReac
         {isMedia ? (
           <>
             <MediaContent message={message} apiKey={apiKey} theme={theme} />
-            {text && <p className="text-sm whitespace-pre-wrap break-words mt-1.5">{text}</p>}
+            {text && <p className="text-sm whitespace-pre-wrap break-words mt-1.5">{isDeleted && <span className="mr-1">🚫</span>}{text}</p>}
           </>
         ) : isLocation ? (
           <a
             className="flex items-center gap-2 text-sm font-semibold underline"
             href={`https://maps.google.com/?q=${lat},${lng}`} target="_blank" rel="noreferrer"
           >
-            <MapPin className="w-4 h-4" /> Location {text ? `· ${text}` : ''}
+            <MapPin className="w-4 h-4" /> {isDeleted && <span>🚫</span>} Location {text ? `· ${text}` : ''}
           </a>
         ) : isContact ? (
           <p className="flex items-center gap-2 text-sm">
             <span className="text-base">👤</span> {message.vcardFormattedName || message.contactFormattedName || message.contactName || (type === 'vcard' && message.vcard ? 'Contact card' : text || 'Contact card')}
           </p>
         ) : text ? (
-          <p className="text-sm whitespace-pre-wrap break-words">{text}</p>
-        ) : isDeleted ? null : (
+          <p className="text-sm whitespace-pre-wrap break-words">{isDeleted && <span className="mr-1">🚫</span>}{text}</p>
+        ) : isDeleted ? (
+          <p className="text-sm">🚫</p>
+        ) : (
           <p className="text-sm italic opacity-80">{type === 'chat' || type === 'revoked' ? '…' : `[${type.replaceAll('_', ' ')}]`}</p>
-        )}
-        {isDeleted && (
-          <p className={`mt-1 italic text-[10px] font-semibold uppercase tracking-wide ${isMe ? 'text-indigo-100/90' : theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
-            🚫 Deleted message
-          </p>
         )}
       </div>
 
@@ -343,10 +340,13 @@ export default function LiveInbox() {
       // recovered text of a deleted message).
       const preview = apiChats.find(c => c.id === chatId)?.lastMessage;
       if (preview?.previewText || preview?.body) {
+        // Strip the leading 🚫 marker so the bubble prefix isn't doubled - the
+        // bubble itself renders 🚫 + full text for deleted messages.
+        const rawText = (preview.body || preview.previewText || '').replace(/^\s*🚫\s*/, '');
         liveStream.seedMessages(chatId, [{
           id: preview.id,
-          body: preview.previewText || preview.body || '',
-          previewText: preview.previewText || preview.body || '',
+          body: rawText,
+          previewText: rawText,
           type: preview.type || 'chat',
           timestamp: preview.timestamp || Math.floor(Date.now() / 1000),
           fromMe: Boolean(preview.fromMe),
@@ -524,7 +524,6 @@ export default function LiveInbox() {
             sidebar.map(chat => {
               const lastMsg = chat.lastMessage;
               const preview = lastMsg?.previewText || messagePreview(lastMsg) || '';
-              const deletedEmoji = (lastMsg?.deleted || lastMsg?.isDeleted || lastMsg?.isRevoked) ? <span className="text-rose-500"> 🚫</span> : null;
               const isActive = activeChatId === chat.id;
               const hasLive = Boolean(liveChats[chat.id]?.messages?.length);
 
@@ -546,7 +545,7 @@ export default function LiveInbox() {
                     </div>
                     <div className="flex items-center justify-between gap-2">
                       <p className={`text-xs truncate ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
-                        {lastMsg?.fromMe ? 'You: ' : ''}{preview || (hasLive ? 'Waiting for new messages...' : '')}{deletedEmoji}
+                        {lastMsg?.fromMe ? 'You: ' : ''}{preview || (hasLive ? 'Waiting for new messages...' : '')}
                       </p>
                       {hasLive && <span className={`text-[9px] shrink-0 font-bold uppercase tracking-wide ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-600'}`}>live</span>}
                     </div>

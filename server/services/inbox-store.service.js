@@ -43,7 +43,7 @@ function previewText(message, fallback = '') {
   }[type];
   if (media) return text ? `${media}: ${text}` : media;
   if (type.includes('call')) return `${message.isMissed || type.includes('missed') ? 'Missed' : 'WhatsApp'} ${message.isVideoCall || type.includes('video') ? 'video' : 'voice'} call`;
-  if (type === 'revoked' || message.isDeleted || message.isRevoked) return text ? `${text} 🚫` : '🚫 Message deleted';
+  if (type === 'revoked' || message.isDeleted || message.isRevoked) return text ? `🚫 ${text}` : '🚫';
   if (type.startsWith('poll')) return `📊 ${message.pollName || message.poll?.name || text || 'Poll'}`;
   if (['buttons_response', 'list_response', 'template_button_reply', 'interactive_response'].includes(type)) return `↩️ ${text || 'Interactive response'}`;
   if (['buttons', 'template_button', 'interactive'].includes(type)) return `🔘 ${text || 'Interactive message'}`;
@@ -332,10 +332,13 @@ class InboxStore {
         VALUES (?,?,?,?,?,?,?,1,0)
         ON CONFLICT(api_key, chat_id, msg_id) DO UPDATE SET is_deleted=1`,
         [apiKey, chatId, refId, Date.now(), safeText(data), msgJson, '[]']);
-      // Reflect the deletion in the sidebar subtitle when it affects the last message.
-      const chat = await DB.get('SELECT last_message_id FROM inbox_chats WHERE api_key=? AND chat_id=?', [apiKey, chatId]);
+      // Reflect the deletion in the sidebar subtitle when it affects the last
+      // message: keep the full original text, prefixed with the 🚫 marker.
+      const chat = await DB.get('SELECT last_message_id, last_body, last_preview FROM inbox_chats WHERE api_key=? AND chat_id=?', [apiKey, chatId]);
       if (chat?.last_message_id === refId) {
-        await DB.run('UPDATE inbox_chats SET last_deleted=1, updated_at=? WHERE api_key=? AND chat_id=?', [Date.now(), apiKey, chatId]);
+        const body = safeText(data) || chat.last_body || '';
+        await DB.run('UPDATE inbox_chats SET last_deleted=1, last_preview=?, updated_at=? WHERE api_key=? AND chat_id=?',
+          [body ? `🚫 ${body}` : '🚫', Date.now(), apiKey, chatId]);
       }
     } catch (error) {
       console.error('Inbox recordDelete failed:', error.message);
