@@ -8,6 +8,7 @@ import { useTheme } from '../ThemeContext';
 import { UserCircle, Search, MessageSquare, LoaderCircle, Lock, Reply, SmilePlus, Download, FileText, MapPin } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import ChatInputForm from '../components/ChatInputForm';
+import EmojiPicker from '../components/EmojiPicker';
 
 const SERVER_URL = (import.meta.env.VITE_WPPCONNECT_URL || '').replace(/\/$/, '');
 const API_URL = `${SERVER_URL}/api`;
@@ -28,7 +29,6 @@ const isSelfMessage = (m) => String(m?.fromMe) === 'true' && String(m?.to) === S
 const dedupeKey = (m) => (msgId(m) || '').replace(/_out$/, '');
 
 const MEDIA_TYPES = ['image', 'video', 'gif', 'audio', 'ptt', 'sticker', 'document'];
-const REACTION_EMOJIS = ['👍', '❤️', '😂', '😢', '🙏', '🎉'];
 
 // Status chats live in the sidebar as standalone entries keyed by the sender's
 // JID under a reserved prefix, so they can never collide with a real 1:1 chat
@@ -227,7 +227,7 @@ function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReac
   const isContact = type === 'vcard' || type === 'contact' || type === 'contact_card';
 
   return (
-    <div className={`flex flex-col max-w-[78%] ${isMe ? 'self-end items-end' : 'self-start items-start'}`}>
+    <div className={`relative flex flex-col max-w-[78%] ${isMe ? 'self-end items-end' : 'self-start items-start'}`}>
       {!isMe && senderTitle && (
         <p className={`text-[10px] font-bold uppercase tracking-wide mb-0.5 px-1 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
           {senderTitle}
@@ -297,14 +297,11 @@ function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReac
       </div>
 
       {showReactions && onReact && (
-        <div className={`mt-1 flex items-center gap-1 px-2 py-1.5 rounded-full border shadow-lg ${theme === 'dark' ? 'bg-[#16191f] border-[#262931]' : 'bg-white border-slate-200'}`}>
-          {REACTION_EMOJIS.map(emoji => (
-            <button key={emoji}
-              onClick={() => { onReact(message, emoji); setShowReactions(false); }}
-              className="text-lg hover:scale-125 transition-transform">
-              {emoji}
-            </button>
-          ))}
+        <div className={`absolute z-20 bottom-9 w-64 ${isMe ? 'right-0' : 'left-0'}`}>
+          <EmojiPicker
+            theme={theme}
+            onSelect={(emo) => { onReact(message, emo); setShowReactions(false); }}
+          />
         </div>
       )}
     </div>
@@ -766,9 +763,10 @@ export default function LiveInbox() {
     if (!chatId) return 'Unknown';
     const names = liveStream.getChatNames();
     if (names[chatId]) return names[chatId];
+    // Phone-book saved name always preferred; formattedName carries the real
+    // phone number for unsaved contacts (never the WA profile pushname).
     if (contacts[chatId]?.name) return contacts[chatId].name;
-    if (contacts[chatId]?.pushname) return contacts[chatId].pushname;
-    if (contacts[chatId]?.verifiedName) return contacts[chatId].verifiedName;
+    if (contacts[chatId]?.formattedName) return contacts[chatId].formattedName;
     return chatId.split('@')[0];
   };
 

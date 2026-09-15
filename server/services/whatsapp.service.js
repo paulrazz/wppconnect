@@ -139,6 +139,7 @@ class Session {
     this.statusCache = {};
     this.chatPreviewCache = new Map();
     this.contactsCache = null;
+    this.contactsNameMap = new Map();
     // chatId -> group subject, warmed from the live chat list and from every
     // group message we normalize. Used to heal group display names in the
     // sidebar when the durable row holds a number or an old sender's name.
@@ -454,7 +455,7 @@ class WhatsAppService {
         // only persist + surface it here.
         const chatId = message.chatId?._serialized || message.chatId || message.to;
         if (chatId) this.cachePreview(session, chatId, message);
-        if (chatId) inboxStore.recordMessage(session.apiKey, chatId, message);
+        if (chatId) inboxStore.recordMessage(session.apiKey, chatId, message, this.resolveContactDisplayName(session, chatId));
         this.io?.to(`session_${session.apiKey}`).emit('new_message', message);
         return;
       }
@@ -462,7 +463,7 @@ class WhatsAppService {
       eventStore.append('message.received', message);
       const chatId = message.chatId?._serialized || message.chatId || (message.fromMe ? message.to : message.from);
       if (chatId) this.cachePreview(session, chatId, message);
-      if (chatId) inboxStore.recordMessage(session.apiKey, chatId, message);
+      if (chatId) inboxStore.recordMessage(session.apiKey, chatId, message, this.resolveContactDisplayName(session, chatId));
       // Trigger automation rules (may send replies, templates, orders, etc.)
       void automation.handleIncomingMessage(message, session.apiKey, this);
       // A single incoming message can be a "mention" and/or a "quote" too.
@@ -619,7 +620,10 @@ class WhatsAppService {
     }
     if (session.client !== client || !Array.isArray(chats)) return;
     try {
-      await inboxStore.bootstrap(session.apiKey, chats);
+      await inboxStore.bootstrap(session.apiKey, chats, {
+        selfId: session.myJid,
+        profileName: session.deviceInfo?.profileName,
+      });
       console.log(`Inbox baseline captured for ${session.apiKey.slice(0, 8)} (${chats.length} chats)`);
     } catch (error) {
       console.warn('Inbox baseline capture failed:', error.message);
@@ -728,7 +732,7 @@ class WhatsAppService {
       }, { chatId: String(to), content: text, sendOptions: options || {} });
       eventStore.append('message.sent', result);
       session.chatPreviewCache.set(to, result);
-      inboxStore.recordMessage(session.apiKey, String(to), result);
+      inboxStore.recordMessage(session.apiKey, String(to), result, this.resolveContactDisplayName(session, String(to)));
       return result;
     }
     const resolvedTo = await this.resolveDestination(apiKey, to);
@@ -737,7 +741,7 @@ class WhatsAppService {
     const result = await this.requireClient(apiKey).sendText(resolvedTo, text, { ...options, markIsRead: false });
     eventStore.append('message.sent', result);
     session.chatPreviewCache.set(to, result);
-    inboxStore.recordMessage(session.apiKey, String(resolvedTo), result);
+    inboxStore.recordMessage(session.apiKey, String(resolvedTo), result, this.resolveContactDisplayName(session, String(resolvedTo)));
     return result;
   }
 
@@ -766,13 +770,10 @@ class WhatsAppService {
       // Never fan out into one history query per chat here. On large accounts
       // that turns a cheap list request into hundreds of sequential IndexedDB
       // lookups. Missing previews are hydrated only when a chat is opened.
-      const contact = chat.contact || {};
-      const displayName = chat.isGroup
-        ? (chat.name || chat.groupMetadata?.subject)
-        : (contact.name || contact.formattedName || contact.verifiedName || contact.pushname || contact.shortName || chat.name);
+      const displayName = this.resolveChatDisplayName(session, chat);
       return {
         ...chat,
-        displayName: displayName || contact.id?.user || chat.id?.user || 'Unknown contact',
+        displayName: displayName || 'Unknown contact',
         lastMessage: (() => {
           if (!lastMessage) return this.previewFromChatMetadata(chat);
           // A deleted/revoked record is just a stub - WhatsApp clears the body
@@ -843,7 +844,40 @@ class WhatsAppService {
     }
     const data = await this.requireClient(apiKey).getAllContacts();
     session.contactsCache = { timestamp: Date.now(), data };
+    this._rebuildContactsNameMap(session);
     return data;
+  }
+
+  _rebuildContactsNameMap(session) {
+    const map = new Map();
+    if (session.contactsCache?.data) {
+      for (const c of session.contactsCache.data) {
+        const id = c.id?._serialized || c.id;
+        if (typeof id === 'string' && id) map.set(id, c);
+      }
+    }
+    session.contactsNameMap = map;
+  }
+
+  resolveContactDisplayName(session, chatId, contactObj = {}) {
+    const contact = (typeof chatId === 'string' && session.contactsNameMap?.get(chatId)) || contactObj;
+    const selfId = session.myJid;
+    const isSelf = contact.isMe || (selfId && chatId === selfId);
+    if (isSelf) return contact.name || session.deviceInfo?.profileName || 'You';
+    if (contact.name) return contact.name;
+    if (contact.formattedName) return contact.formattedName;
+    if (String(chatId).endsWith('@c.us')) {
+      const num = String(chatId).split('@')[0];
+      if (num) return num;
+    }
+    return null;
+  }
+
+  resolveChatDisplayName(session, chat) {
+    const chatId = chat.id?._serialized || chat.id || '';
+    const isGroup = chat.isGroup || String(chatId).endsWith('@g.us');
+    if (isGroup) return chat.name || chat.groupMetadata?.subject || null;
+    return this.resolveContactDisplayName(session, chatId, chat.contact || {});
   }
 
   // Resolve a contact/group's avatar to a base64 dataUrl, running entirely

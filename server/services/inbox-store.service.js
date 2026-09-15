@@ -285,13 +285,15 @@ class InboxStore {
   // chat list at that moment (summaries only - no pre-login history backfill)
   // and marks the very first login as startedAt. Later boots refresh the
   // baseline without losing accumulated messages.
-  async bootstrap(apiKey, chats = []) {
+  async bootstrap(apiKey, chats = [], opts = {}) {
     await this.readyPromise;
     const meta = await DB.get('SELECT started_at FROM inbox_meta WHERE api_key=?', [apiKey]);
     const startedAt = meta?.started_at || Date.now();
     await DB.run(`INSERT INTO inbox_meta (api_key, started_at, last_boot_at, updated_at) VALUES (?,?,?,?)
       ON CONFLICT(api_key) DO UPDATE SET last_boot_at=excluded.last_boot_at, updated_at=excluded.updated_at`,
       [apiKey, startedAt, Date.now(), Date.now()]);
+    const selfId = opts.selfId || null;
+    const profileName = opts.profileName || null;
     for (const chat of chats) {
       const chatId = ids(chat.id);
       if (!chatId) continue;
@@ -299,41 +301,43 @@ class InboxStore {
       const lastMessage = chat.lastMessage || messages[messages.length - 1] || chat.chatlistPreview || null;
       const contact = chat.contact || {};
       const isGroup = Boolean(chat.isGroup);
-      const displayName = isGroup
-        ? (chat.name || chat.groupMetadata?.subject || chatId.split('@')[0])
-        : (contact.name || contact.formattedName || contact.verifiedName || contact.pushname || contact.shortName || chat.name || chatId.split('@')[0]);
+      const isSelf = selfId && (chatId === selfId || contact.isMe);
+      let displayName;
+      if (isSelf) {
+        displayName = contact.name || profileName || 'You';
+      } else if (isGroup) {
+        displayName = chat.name || chat.groupMetadata?.subject || chatId.split('@')[0];
+      } else {
+        displayName = contact.name || contact.formattedName || chatId.split('@')[0];
+      }
       const preview = previewDto(lastMessage, chat.t);
-      // INSERT OR IGNORE semantics for preview columns: a live-recorded chat
-      // row (with real last-message text) is never clobbered by this (older)
-      // baseline snapshot. display_name and is_group are still repaired on
-      // conflict so a fallback id-name from a live-only row picks up the real
-      // contact name once the baseline snapshot lands.
       await DB.run(`INSERT INTO inbox_chats
         (api_key, chat_id, display_name, is_group, last_message_id, last_preview, last_body, last_type, last_ts, last_from_me, last_deleted, updated_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(api_key, chat_id) DO UPDATE SET
-          display_name = CASE WHEN lower(inbox_chats.display_name) = lower(substr(inbox_chats.chat_id, 1, instr(inbox_chats.chat_id, '@') - 1)) THEN excluded.display_name ELSE inbox_chats.display_name END,
+          display_name = CASE
+            WHEN lower(inbox_chats.display_name) = lower(substr(inbox_chats.chat_id, 1, instr(inbox_chats.chat_id, '@') - 1)) THEN excluded.display_name
+            WHEN is_group = 0 AND ? THEN excluded.display_name
+            ELSE inbox_chats.display_name END,
           is_group = excluded.is_group`,
-        [apiKey, chatId, displayName, isGroup ? 1 : 0, preview.id, preview.previewText, preview.body, preview.type, preview.timestamp, preview.fromMe ? 1 : 0, preview.deleted ? 1 : 0, Date.now()]);
+        [apiKey, chatId, displayName, isGroup ? 1 : 0, preview.id, preview.previewText, preview.body, preview.type, preview.timestamp, preview.fromMe ? 1 : 0, preview.deleted ? 1 : 0, Date.now(), isGroup ? 0 : 1]);
     }
   }
 
-  async recordMessage(apiKey, chatId, message) {
+  async recordMessage(apiKey, chatId, message, nameHintOverride) {
     await this.readyPromise;
     try {
       const saved = this.saveMessage(apiKey, chatId, message);
       await DB.run(`INSERT INTO inbox_messages (api_key, chat_id, msg_id, stored_at, body_text, message_json) VALUES (?,?,?,?,?,?)
         ON CONFLICT(api_key, chat_id, msg_id) DO UPDATE SET stored_at=excluded.stored_at, body_text=excluded.body_text, message_json=excluded.message_json`,
         [apiKey, chatId, saved.id, saved.storedAt, saved.bodyText, saved.json]);
-      // For group chats, nameHint is the GROUP subject (whatever the message
-      // carried) - never the sender's notifyName/pushname, or every incoming
-      // group message would rename the sidebar chat to the last person who
-      // spoke. When a group name is not available, leave the existing row
-      // (or the phone fallback) alone; bootstrap() heals real subjects.
+      // Server-side resolved nameHint takes priority: it carries the phone-book
+      // saved name or formatted phone number, never the WA profile pushname.
+      // For group chats, nameHint is still the GROUP subject from the message.
       const isGroupChat = /@g\.us$/.test(chatId);
       const nameHint = isGroupChat
-        ? (typeof message?.groupName === 'string' && message.groupName ? message.groupName : null)
-        : (message?.notifyName || message?.pushname || null);
+        ? (nameHintOverride || (typeof message?.groupName === 'string' && message.groupName ? message.groupName : null))
+        : nameHintOverride || null;
       await this.upsertChat(apiKey, chatId, message, nameHint);
     } catch (error) {
       console.error('Inbox recordMessage failed:', error.message);

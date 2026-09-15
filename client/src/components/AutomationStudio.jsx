@@ -6,6 +6,7 @@ import {
   Sparkles, Activity, ToggleLeft, ToggleRight, Layers, AlertTriangle,
 } from 'lucide-react';
 import liveStream from '../liveStream';
+import EmojiPicker from './EmojiPicker';
 
 const SERVER_URL = (import.meta.env.VITE_WPPCONNECT_URL || '').replace(/\/$/, '');
 
@@ -588,18 +589,13 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
                 })}
 
                 {draft.action.type === 'send_reaction' && (
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {['👍', '🎉', '❤️', '😂', '😢', '🙏', '👏', '🔥'].map(emo => (
-                      <button
-                        key={emo}
-                        type="button"
-                        onClick={() => patchAction({ reaction: draft.action.reaction === emo ? '' : emo })}
-                        className={`text-xl p-1.5 rounded-lg transition-transform hover:scale-110 ${draft.action.reaction === emo ? (theme === 'dark' ? 'bg-indigo-500/20' : 'bg-indigo-100') : 'opacity-60 hover:opacity-100'}`}
-                      >
-                        {emo}
-                      </button>
-                    ))}
-                  </div>
+                  <EmojiPicker
+                    theme={theme}
+                    gridCols="grid-cols-8"
+                    heightClass="max-h-56"
+                    selected={draft.action.reaction}
+                    onSelect={(emo) => patchAction({ reaction: draft.action.reaction === emo ? '' : emo })}
+                  />
                 )}
               </div>
             </div>
