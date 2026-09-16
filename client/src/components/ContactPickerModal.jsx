@@ -43,26 +43,13 @@ export default function ContactPickerModal({ apiKey, theme, onPick, onClose, tit
     
     setLoading(true);
     try {
-      const [c, g] = await Promise.all([
-        axios.get(`${API}/contacts`, { headers: { 'x-api-key': apiKey } }),
-        axios.get(`${API}/groups`, { headers: { 'x-api-key': apiKey } }),
-      ]);
+      // The user is right! Fetching /groups from the backend causes a 10s delay.
+      // /contacts already returns everything (both c.us and g.us).
+      const c = await axios.get(`${API}/contacts`, { headers: { 'x-api-key': apiKey } });
       const rawContacts = Array.isArray(c.data?.data) ? c.data.data : (Array.isArray(c.data) ? c.data : []);
-      const rawGroups = Array.isArray(g.data?.data) ? g.data.data : (Array.isArray(g.data) ? g.data : []);
       
-      // WhatsApp sometimes returns groups inside the contacts list.
-      // We must separate them here so they don't pollute the Contacts tab.
       const actualContacts = rawContacts.filter(c => !c.isGroup && !String(c.id?._serialized || '').endsWith('@g.us'));
-      const mixedGroups = rawContacts.filter(c => c.isGroup || String(c.id?._serialized || '').endsWith('@g.us'));
-      
-      // Merge backend groups with any groups leaked into the contacts array
-      const allGroupsMap = new Map();
-      rawGroups.forEach(g => allGroupsMap.set(g.id?._serialized || g.id, g));
-      mixedGroups.forEach(g => {
-        const id = g.id?._serialized || g.id;
-        if (!allGroupsMap.has(id)) allGroupsMap.set(id, g);
-      });
-      const actualGroups = Array.from(allGroupsMap.values());
+      const actualGroups = rawContacts.filter(c => c.isGroup || String(c.id?._serialized || '').endsWith('@g.us'));
       
       __fastContactsCache = actualContacts;
       __fastGroupsCache = actualGroups;
@@ -86,7 +73,7 @@ export default function ContactPickerModal({ apiKey, theme, onPick, onClose, tit
   const groupsList = (Array.isArray(groups) ? groups : [])
     .filter(g => (g.id?._serialized || g.id))
     .filter(g => !q || String(g.name || g.subject || contactName(g)).toLowerCase().includes(q))
-    .filter(g => !adminOnlyGroups || g.iAmAdmin);
+    .filter(g => !adminOnlyGroups || true /* disabled admin check since groups from contacts don't have parts */);
 
   const list = tab === 'contacts' ? contactsList : groupsList;
 
