@@ -1059,7 +1059,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
                   onChange={e => setAiConfig(prev => ({ ...prev, personaContextCount: parseInt(e.target.value) || 0 }))}
                   className={inputCls(theme)}
                 />
-                <span className={`text-[10px] mt-1 block ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>Number of your recent messages sent in this specific chat to inject into the AI prompt so it learns your natural tone and persona.</span>
+                <span className={`text-[10px] mt-1 block ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>The amount of your recent outgoing messages from the triggered chat to inject into the AI prompt, allowing it to dynamically adapt to your persona for that specific person or group.</span>
               </div>
             </div>
             <div className="mt-6 flex justify-end gap-3">
