@@ -9,11 +9,23 @@ async function generateReply(config, systemPrompt, messagesContext) {
     const modelName = config.model || 'gemini-3.6-flash';
     const model = genAI.getGenerativeModel({ model: modelName, systemInstruction: systemPrompt });
     
-    // Format chat history for Gemini
-    const contents = messagesContext.map(m => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: `${m.authorName ? m.authorName + ': ' : ''}${m.text}` }]
-    }));
+    // Format chat history for Gemini (collapse consecutive identical roles)
+    const contents = [];
+    for (const m of messagesContext) {
+      const gRole = m.role === 'assistant' ? 'model' : 'user';
+      const text = `${m.authorName ? m.authorName + ': ' : ''}${m.text}`;
+      
+      if (contents.length > 0 && contents[contents.length - 1].role === gRole) {
+         contents[contents.length - 1].parts[0].text += `\n\n${text}`;
+      } else {
+         contents.push({ role: gRole, parts: [{ text }] });
+      }
+    }
+    
+    // Gemini strictly requires the history to end with a 'user' turn
+    if (contents.length > 0 && contents[contents.length - 1].role !== 'user') {
+       contents.push({ role: 'user', parts: [{ text: '(System: Please reply)' }] });
+    }
     
     try {
       const result = await model.generateContent({ contents });

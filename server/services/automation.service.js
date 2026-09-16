@@ -1120,6 +1120,12 @@ class AutomationService {
                });
             }
             
+            // Gemini strictly requires the history to end with a user turn.
+            // If testing by messaging yourself, the last turn might be marked 'assistant'.
+            if (contextMessages.length > 0 && contextMessages[contextMessages.length - 1].role !== 'user') {
+               contextMessages.push({ role: 'user', authorName: 'System', text: 'Please reply.' });
+            }
+            
             // 3. Start Typing
             await whatsappService.startTyping(apiKey, ctx.chatId);
             
