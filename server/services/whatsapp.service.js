@@ -42,13 +42,22 @@ function compactPreview(value, limit = 160) {
 function messagePreview(message) {
   if (!message) return 'No recent message';
   const type = String(message.type || 'chat').toLowerCase();
+  // View-once media: normalize to its inner media type so the sidebar preview
+  // reads like a normal photo/video (never a bare "[view once]").
+  const normalizedType =
+    type === 'viewonce' || type === 'view_once' || type === 'viewoncemessage' || message?.viewOnceMessage
+      ? String(((() => {
+          const inner = (message?.viewOnceMessage && typeof message.viewOnceMessage === 'object') ? (message.viewOnceMessage.message || message.viewOnceMessage) : {};
+          return Object.keys(inner || {}).find(key => String(key).endsWith('Message')) || 'image';
+        })())).replace(/Message$/, '').toLowerCase()
+      : type;
   const text = safeMessageText(message);
   const media = {
     image: '📷 Photo', video: '🎥 Video', gif: '🎞️ GIF', audio: '🎵 Audio', ptt: '🎙️ Voice note',
     sticker: '🏷️ Sticker', document: `📄 ${message.filename || message.fileName || 'Document'}`,
     location: '📍 Location', live_location: '📍 Live location', vcard: '👤 Contact card',
     contact_card: '👤 Contact card', contacts_array: '👥 Contact cards',
-  }[type];
+  }[normalizedType];
   if (media) return text ? `${media}: ${text}` : media;
   if (type.includes('call')) return `${message.isMissed || type.includes('missed') ? 'Missed' : 'WhatsApp'} ${message.isVideoCall || type.includes('video') ? 'video' : 'voice'} call`;
   if (type === 'revoked' || message.isDeleted || message.isRevoked) return text ? `🚫 ${text}` : '🚫';
@@ -107,6 +116,33 @@ function normalizeChatIdentity(message, apiKey) {
   // the client's name map) can heal numeric/sender-name display labels.
   if (apiKey) whatsappService.rememberGroupNames(apiKey, [{ chatId, name: groupName }]);
   return normalized;
+}
+
+// WhatsApp Web delivers "view once" media wrapped in a `viewOnceMessage`
+// container (inner key like `imageMessage` / `videoMessage`). wppconnect does
+// not always unwrap it, so a raw view-once message can surface with an unknown
+// type (e.g. "viewOnce") and its media nested away - which makes the inbox
+// render a bare "[view once]" bubble and breaks media download. Normalize it
+// here: unwrap the inner message, promote the inner media type, flag the
+// message with `isViewOnce: true` (the UI renders it like any other media -
+// no timer emoji, no restriction) and keep any caption/pushname intact.
+function normalizeViewOnce(message) {
+  if (!message || typeof message !== 'object') return message;
+  if (message.isViewOnce || message.viewOnce) return { ...message, isViewOnce: true };
+  const inner = message.viewOnceMessage;
+  if (!inner || typeof inner !== 'object') return message;
+  const child = inner.message || inner;
+  const mediaKey = Object.keys(child || {}).find(key => String(key).endsWith('Message'));
+  const media = mediaKey ? child[mediaKey] : child;
+  if (!media || typeof media !== 'object') return message;
+  return {
+    ...message,
+    ...media,
+    type: String(mediaKey || media.type || 'image').replace(/Message$/, '').toLowerCase(),
+    caption: message.caption ?? media.caption ?? null,
+    body: message.body ?? media.caption ?? null,
+    isViewOnce: true,
+  };
 }
 
 // Status timestamps arrive as seconds; only a couple of wppconnect paths use
@@ -424,11 +460,19 @@ class WhatsAppService {
       // Force a canonical chatId for group messages first, so every consumer
       // below (media cache, inbox store, socket stream, ledger, automation)
       // buckets and attributes the message identically.
-      const message = normalizeChatIdentity(raw, session.apiKey);
+      const message = normalizeViewOnce(normalizeChatIdentity(raw, session.apiKey));
       // Preserve media while it is still downloadable. WhatsApp can remove
       // the live message immediately when the sender chooses Delete for all.
       if (['image', 'video', 'gif', 'audio', 'ptt', 'sticker', 'document'].includes(String(message.type || '').toLowerCase())) {
-        void client.downloadMedia(message).then(dataUrl => eventStore.cacheMedia(message.id, dataUrl, { mimetype: message.mimetype, filename: message.filename || message.fileName })).catch(() => {});
+        // Stickers are removed from WhatsApp's CDN faster than other media
+        // types. A short delay lets the store settle before we grab the blob,
+        // reducing 404s on stickers specifically.
+        const isSticker = String(message.type || '').toLowerCase() === 'sticker';
+        const delay = isSticker ? 1500 : 0;
+        setTimeout(() => {
+          void client.downloadMedia(message).then(dataUrl => eventStore.cacheMedia(message.id, dataUrl, { mimetype: message.mimetype, filename: message.filename || message.fileName }))
+            .catch(err => { if (isSticker) console.log('[media]', session.apiKey.slice(0, 8), 'proactive sticker cache failed:', String(err?.message || err).slice(0, 120)); });
+        }, delay);
       }
       if (message.isStatus || message.isStatusV3 || message.from === 'status@broadcast') {
         const senderId = message.author || message.from;
@@ -864,7 +908,13 @@ class WhatsAppService {
     const selfId = session.myJid;
     const isSelf = contact.isMe || (selfId && chatId === selfId);
     if (isSelf) return contact.name || session.deviceInfo?.profileName || 'You';
-    if (contact.name) return contact.name;
+    
+    // Prevent the bot's own pushname (e.g. 'big9ja') from bleeding into newly
+    // created outbound peer chats. WPPConnect sometimes echoes the sender's
+    // pushname onto the chat.name / contact.name when no other name is known.
+    const botName = session.deviceInfo?.profileName;
+    if (contact.name && (!botName || contact.name !== botName)) return contact.name;
+    
     if (contact.formattedName) return contact.formattedName;
     if (String(chatId).endsWith('@c.us')) {
       const num = String(chatId).split('@')[0];
@@ -959,13 +1009,14 @@ class WhatsAppService {
   // avatar disk cache. Cache hits are one disk read each; misses are fetched
   // in the background (only while WhatsApp is connected) and never block the
   // request - the surface fills in via avatar_ready as each fetch resolves.
-  decorateChatsWithAvatars(apiKey, chats = []) {
+  async decorateChatsWithAvatars(apiKey, chats = []) {
+    const session = this.getSession(apiKey);
+    const connected = session.client?.isConnected?.();
     try {
-      const connected = Boolean(this.getSession(apiKey)?.client);
       for (const chat of chats) {
         const id = chat?.id?._serialized || chat?.id;
         if (typeof id !== 'string' || !id) continue;
-        const cached = eventStore.getCachedAvatar(id, AVATAR_TTL_MS);
+        const cached = await eventStore.getCachedAvatar(id, AVATAR_TTL_MS);
         if (cached) { chat.profilePic = cached; continue; }
         if (connected) this.queueAvatar(apiKey, id);
       }
@@ -976,11 +1027,11 @@ class WhatsAppService {
   // Per-sender avatars for the status payload. Returns { senderId: dataUrl }
   // only for cached entries - misses queue a background fetch (their picture
   // shows up via avatar_ready after it resolves).
-  statusProfiles(apiKey, senderIds = []) {
+  async statusProfiles(apiKey, senderIds = []) {
     const profiles = {};
     for (const senderId of senderIds) {
       if (!senderId || senderId === 'status@broadcast') continue;
-      const cached = eventStore.getCachedAvatar(senderId, AVATAR_TTL_MS);
+      const cached = await eventStore.getCachedAvatar(senderId, AVATAR_TTL_MS);
       if (cached) { profiles[senderId] = cached; continue; }
       this.queueAvatar(apiKey, senderId);
     }
@@ -1149,11 +1200,14 @@ class WhatsAppService {
   async sendPoll(apiKey, to, name, choices, options) { return this.requireClient(apiKey).sendPollMessage(await this.resolveDestination(apiKey, to), name, choices, options); }
   sendReaction(apiKey, messageId, reaction) { return this.requireClient(apiKey).sendReactionToMessage(messageId, reaction); }
 
-  getEvents(query) { return eventStore.list(query); }
-  getDeletedMessages(query) { return eventStore.list({ ...query, type: 'message.deleted', limit: Math.min(Number(query?.limit) || 100, 500) }).filter(entry => entry.data?.from !== 'status@broadcast'); }
-  getDeletions(query) {
-    return eventStore.list({ ...query, types: ['message.deleted', 'status.deleted'], limit: Math.min(Number(query?.limit) || 100, 500) })
-      .map(entry => ({ ...entry, deletionScope: entry.type === 'status.deleted' || entry.data?.from === 'status@broadcast' ? 'status' : entry.data?.original?.isGroupMsg || String(entry.data?.original?.chatId || '').includes('@g.us') ? 'group' : 'private-chat' }));
+  async getEvents(query) { return await eventStore.list(query); }
+  async getDeletedMessages(query) { 
+    const list = await eventStore.list({ ...query, type: 'message.deleted', limit: Math.min(Number(query?.limit) || 100, 500) });
+    return list.filter(entry => entry.data?.from !== 'status@broadcast'); 
+  }
+  async getDeletions(query) {
+    const list = await eventStore.list({ ...query, types: ['message.deleted', 'status.deleted'], limit: Math.min(Number(query?.limit) || 100, 500) });
+    return list.map(entry => ({ ...entry, deletionScope: entry.type === 'status.deleted' || entry.data?.from === 'status@broadcast' ? 'status' : entry.data?.original?.isGroupMsg || String(entry.data?.original?.chatId || '').includes('@g.us') ? 'group' : 'private-chat' }));
   }
 
   async downloadMedia(apiKey, messageId) {
@@ -1164,7 +1218,7 @@ class WhatsAppService {
     // the same id without it.
     const canonicalId = String(messageId).replace(/_out$/, '');
     let cached;
-    try { cached = eventStore.getCachedMedia(canonicalId); } catch (e) {}
+    try { cached = await eventStore.getCachedMedia(canonicalId); } catch (e) {}
     if (cached?.dataUrl) return cached;
     console.log('[media]', shortKey, 'cache miss for', canonicalId);
     // Revoked messages are often removed from WhatsApp's live store. Prefer
@@ -1193,9 +1247,19 @@ class WhatsAppService {
     let dataUrl;
     try { dataUrl = await withTimeout(client.downloadMedia(message), 20000); } catch (err) {
       console.log('[media]', shortKey, 'downloadMedia TIMED OUT OR THREW for', canonicalId, '->', String(err?.message || err).slice(0, 120), '| fromMe:', message?.fromMe, '| type:', message?.type, '| nativeErr:', nativeErr ? 'yes' : 'no');
-      const error = new Error('This deleted media is no longer available from WhatsApp');
-      error.statusCode = 410;
-      throw error;
+      // One retry with a fresh message reference — WhatsApp CDN sometimes
+      // returns a transient 404 for stickers/ephemeral media.
+      if (String(message.type || '').toLowerCase() === 'sticker') {
+        try {
+          const fresh = await withTimeout(client.getMessageById(canonicalId), 15000);
+          if (fresh) dataUrl = await withTimeout(client.downloadMedia(fresh), 20000);
+        } catch (_) {}
+      }
+      if (!dataUrl) {
+        const error = new Error('This deleted media is no longer available from WhatsApp');
+        error.statusCode = 410;
+        throw error;
+      }
     }
     if (!dataUrl) {
       console.log('[media]', shortKey, 'downloadMedia returned blank for', canonicalId);
@@ -1242,4 +1306,5 @@ class WhatsAppService {
   }
 }
 
-module.exports = new WhatsAppService();
+const whatsappService = new WhatsAppService();
+module.exports = whatsappService;

@@ -1,0 +1,14 @@
+node_modules
+server/node_modules
+client/node_modules
+server/whatsapp-session-data
+server/tokens
+.env
+.git
+.gitignore
+npm-debug.log
+yarn-error.log
+client/dist
+*.sqlite
+*.sqlite3
+*.db

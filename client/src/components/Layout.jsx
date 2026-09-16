@@ -77,7 +77,7 @@ export default function Layout({ children }) {
     <div className="flex h-screen bg-slate-50 dark:bg-[#0a0c10] text-slate-700 dark:text-slate-300 font-sans selection:bg-indigo-500/30 overflow-hidden flex-col">
       
       {/* Universal Top Header */}
-      <div className="h-16 flex items-center justify-between px-4 sm:px-6 border-b border-slate-200 dark:border-[#1e222b] bg-white/80 dark:bg-[#0d1015]/80 backdrop-blur-xl z-30 shrink-0">
+      <div className="min-h-16 safe-area-top flex items-center justify-between px-4 sm:px-6 border-b border-slate-200 dark:border-[#1e222b] bg-white/80 dark:bg-[#0d1015]/80 backdrop-blur-xl z-30 shrink-0">
         <div className="flex items-center">
           <button onClick={() => setMobileMenuOpen(true)} className="p-2 mr-4 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white rounded-lg bg-slate-100 dark:bg-[#16191f] border border-slate-200 dark:border-[#1e222b] transition-colors">
             <Menu size={20} />
@@ -109,7 +109,7 @@ export default function Layout({ children }) {
             />
             <motion.aside 
               initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} transition={{ type: 'spring', bounce: 0, duration: 0.4 }}
-              className="fixed top-0 left-0 bottom-0 w-64 bg-white dark:bg-[#0d1015] border-r border-slate-200 dark:border-[#1e222b] flex flex-col justify-between z-50 shadow-2xl"
+              className="fixed top-0 left-0 bottom-0 w-64 max-w-[85vw] bg-white dark:bg-[#0d1015] border-r border-slate-200 dark:border-[#1e222b] flex flex-col justify-between z-50 shadow-2xl safe-area-top safe-area-bottom"
             >
               {/* Close Button Inside Modal */}
               <button 

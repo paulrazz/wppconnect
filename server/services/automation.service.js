@@ -56,9 +56,9 @@ const EVENT_FIELDS = {
   'message.quote': ['sender', 'senderName', 'contactName', 'chatId', 'groupName', 'isGroup', 'fromMe', 'text', 'isQuotingMe', 'quotedText', 'mediaType', 'hasMedia'],
   'message.mention': ['sender', 'senderName', 'contactName', 'chatId', 'groupName', 'isGroup', 'fromMe', 'text', 'mentionsMe', 'mediaType', 'hasMedia'],
   'message.reaction': ['sender', 'senderName', 'contactName', 'chatId', 'groupName', 'isGroup', 'reaction'],
-  'message.deleted': ['sender', 'senderName', 'contactName', 'chatId', 'groupName', 'isGroup', 'fromMe', 'text', 'hasMedia', 'mediaType', 'recoveryStatus'],
+  'message.deleted': ['sender', 'senderName', 'contactName', 'chatId', 'groupName', 'isGroup', 'fromMe', 'text', 'deletedText', 'hasMedia', 'mediaType', 'recoveryStatus'],
   'status.received': ['sender', 'senderName', 'contactName', 'text', 'hasMedia', 'mediaType', 'type'],
-  'status.deleted': ['sender', 'senderName', 'text', 'recoveryStatus'],
+  'status.deleted': ['sender', 'senderName', 'text', 'deletedText', 'recoveryStatus'],
   'call.received': ['sender', 'senderName', 'contactName', 'chatId', 'groupName', 'isGroup', 'callKind', 'isVideo', 'fromMe'],
   'group.participant_changed': ['chatId', 'groupName', 'action', 'actor', 'participant', 'senderName', 'byMe'],
 };
@@ -76,7 +76,7 @@ const EVENT_DEFAULT_CONDITION = (event) =>
   event === 'message.received' ? { field: 'text', op: 'contains', value: '' } :
   { field: 'sender', op: 'equals', value: '' };
 
-const FIELDS = ['sender', 'senderName', 'contactName', 'chatId', 'groupName', 'isGroup', 'fromMe', 'text', 'hasMedia', 'mediaType', 'type', 'mentionsMe', 'isQuotingMe', 'quotedText', 'reaction', 'action', 'actor', 'participant', 'byMe', 'callKind', 'isVideo', 'recoveryStatus'];
+const FIELDS = ['sender', 'senderName', 'contactName', 'chatId', 'groupName', 'isGroup', 'fromMe', 'text', 'deletedText', 'hasMedia', 'mediaType', 'type', 'mentionsMe', 'isQuotingMe', 'quotedText', 'reaction', 'action', 'actor', 'participant', 'byMe', 'callKind', 'isVideo', 'recoveryStatus'];
 
 const STRING_OPS = ['equals', 'not_equals', 'contains', 'in', 'not_in'];
 const TEXT_OPS = ['contains', 'not_contains', 'equals', 'not_equals', 'starts_with', 'ends_with', 'matches_regex', 'in', 'not_in'];
@@ -91,6 +91,7 @@ const OPS_BY_FIELD = {
   isGroup: BOOL_OPS,
   fromMe: BOOL_OPS,
   text: TEXT_OPS,
+  deletedText: TEXT_OPS,
   hasMedia: BOOL_OPS,
   mediaType: ['equals', 'not_equals', 'in', 'not_in'],
   type: ['equals', 'not_equals', 'in', 'not_in'],
@@ -118,6 +119,7 @@ const FIELD_META = {
   isGroup: { label: 'Is a group chat', hint: 'Matches when the event is from a group' },
   fromMe: { label: 'From my number', hint: 'Matches events involving my own account' },
   text: { label: 'Message text', hint: 'Body or caption of the message / status' },
+  deletedText: { label: 'Deleted text', hint: 'Text of the message that was deleted' },
   hasMedia: { label: 'Has media', hint: 'Matches when an image, video, audio, document or sticker is present' },
   mediaType: { label: 'Media type', hint: 'image, video, gif, audio, ptt, sticker or document' },
   type: { label: 'Message type', hint: 'The internal WhatsApp type, e.g. chat / image / vcard' },
@@ -186,17 +188,30 @@ const ACTION_META = {
 };
 
 const PLACEHOLDERS = [
-  { token: '{name}', label: 'WhatsApp profile name' },
-  { token: '{contactName}', label: 'Saved phone-book name' },
-  { token: '{number}', label: 'Sender phone number' },
-  { token: '{from}', label: 'Sender WhatsApp ID' },
-  { token: '{chatId}', label: 'Chat / group ID' },
-  { token: '{groupName}', label: 'Group name' },
-  { token: '{text}', label: 'Message text' },
-  { token: '{reaction}', label: 'Reaction emoji' },
-  { token: '{mediaType}', label: 'Media type (image, video, …)' },
-  { token: '{type}', label: 'Message type' },
-  { token: '{time}', label: 'Local time' },
+  { token: '{name}',       label: 'Sender WhatsApp profile name' },
+  { token: '{contactName}',label: 'Saved phone-book name' },
+  { token: '{number}',     label: 'Sender phone number' },
+  { token: '{from}',       label: 'Sender WhatsApp ID' },
+  { token: '{chatId}',     label: 'Chat / group ID' },
+  { token: '{groupName}',  label: 'Group name' },
+  { token: '{text}',       label: 'Message text or caption' },
+  { token: '{deletedText}',label: 'Deleted message text' },
+  { token: '{eventMedia}', label: 'URL to use event media (for send media action)' },
+  { token: '{deletedMedia}',label: 'URL to use deleted media (for send media action)' },
+  { token: '{quotedText}', label: 'Text of the quoted / replied-to message' },
+  { token: '{reaction}',   label: 'Reaction emoji' },
+  { token: '{mediaType}',  label: 'Media type (image, video, …)' },
+  { token: '{type}',       label: 'Message type' },
+  { token: '{messageId}',  label: 'Message ID' },
+  { token: '{action}',     label: 'Group member action (add, remove, …)' },
+  { token: '{actor}',      label: 'Group member who performed the action' },
+  { token: '{participant}',label: 'Affected group members' },
+  { token: '{recoveryStatus}', label: 'Deleted-message recovery status' },
+  { token: '{callType}',   label: 'Call type (voice or video)' },
+  { token: '{isGroup}',    label: 'true / false whether it was a group' },
+  { token: '{timestamp}',  label: 'Event date & time' },
+  { token: '{date}',       label: 'Current date (e.g. 15 Sep 2026)' },
+  { token: '{time}',       label: 'Current time' },
 ];
 
 const DATA_DIR = path.resolve(__dirname, '..', 'data', 'automation');
@@ -284,18 +299,42 @@ function normalizeAction(action) {
     }
   }
   if (type === 'send_media' && payload.media) {
-    if (!/^data:/.test(payload.media)) {
-      let url;
-      try { url = new URL(payload.media); } catch (_) { throw badRequest('Media must be a data URL or an http(s) URL'); }
-      if (url.protocol !== 'https:' && url.protocol !== 'http:') throw badRequest('Media URLs must use http or https');
-    } else if (payload.media.length > MAX_MEDIA_BYTES * 1.4) {
-      throw badRequest('Media data URL is too large (max 25 MB)');
+    if (payload.media !== '{eventMedia}' && payload.media !== '{deletedMedia}') {
+      if (!/^data:/.test(payload.media)) {
+        let url;
+        try { url = new URL(payload.media); } catch (_) { throw badRequest('Media must be a data URL, an http(s) URL, or {eventMedia}'); }
+        if (url.protocol !== 'https:' && url.protocol !== 'http:') throw badRequest('Media URLs must use http or https');
+      } else if (payload.media.length > MAX_MEDIA_BYTES * 1.4) {
+        throw badRequest('Media data URL is too large (max 25 MB)');
+      }
     }
   }
   if (type === 'forward_to' && !/^[0-9+@\-.\s]+$/.test(payload.to)) {
     throw badRequest('Destination must be a phone number or a WhatsApp ID');
   }
   return { type, ...payload };
+}
+
+// Deep-normalize a single condition or group node. Conditions have { field,
+// op, value }; groups have { match: 'all'|'any', conditions: [...] }.
+function normalizeConditionNode(node, depth = 0) {
+  if (!node || typeof node !== 'object') throw badRequest('Condition must be an object');
+  if (depth > 3) throw badRequest('Conditions cannot be nested more than 3 levels deep');
+  // Group node: recursively normalize children
+  if (Array.isArray(node.conditions) || node.match) {
+    const match = node.match === 'any' ? 'any' : 'all';
+    const children = (Array.isArray(node.conditions) ? node.conditions : [])
+      .map(c => normalizeConditionNode(c, depth + 1));
+    if (!children.length) throw badRequest('A condition group must have at least one condition');
+    return { match, conditions: children };
+  }
+  return normalizeCondition(node, 0, 'message.received');
+}
+
+// Recursively count all leaf conditions in a tree (for the 10-condition cap).
+function countLeaves(node) {
+  if (node.field) return 1;
+  return (node.conditions || []).reduce((n, c) => n + countLeaves(c), 0);
 }
 
 function normalizeRule(body) {
@@ -307,19 +346,33 @@ function normalizeRule(body) {
   const event = body.trigger?.event || 'message.received';
   if (!EVENT_IDS.includes(event)) throw badRequest(`Trigger event "${event}" is not supported`);
 
-  const rawConditions = Array.isArray(body.trigger?.conditions) ? body.trigger.conditions : [];
-  if (!rawConditions.length) throw badRequest('At least one condition is required');
-  if (rawConditions.length > 10) throw badRequest('A rule may have at most 10 conditions');
+  // Accept both flat conditions[] (legacy) and nested groups[] (new).
+  // When groups[] is provided, wrap it into a single root group.
+  let triggerCondition;
+  if (Array.isArray(body.trigger?.groups) && body.trigger.groups.length) {
+    if (body.trigger.groups.length > 1) {
+      triggerCondition = { match: body.trigger?.match === 'any' ? 'any' : 'all', conditions: body.trigger.groups.map(g => normalizeConditionNode(g, 0)) };
+    } else {
+      triggerCondition = normalizeConditionNode(body.trigger.groups[0], 0);
+    }
+  } else {
+    const rawConditions = Array.isArray(body.trigger?.conditions) ? body.trigger.conditions : [];
+    if (!rawConditions.length) throw badRequest('At least one condition is required');
+    if (rawConditions.length > 10) throw badRequest('A rule may have at most 10 conditions');
+    triggerCondition = { match: body.trigger?.match === 'any' ? 'any' : 'all', conditions: rawConditions.map((c, i) => normalizeCondition(c, i, event)) };
+  }
 
-  const match = body.trigger?.match === 'any' ? 'any' : 'all';
-  const conditions = rawConditions.map((condition, index) => normalizeCondition(condition, index, event));
+  // Enforce the 10-leaf cap
+  if (countLeaves(triggerCondition) > 10) throw badRequest('A rule may have at most 10 leaf conditions');
+
   const action = normalizeAction(body.action || {});
+  const chatScope = body.trigger?.chatScope ? String(body.trigger.chatScope).trim() : null;
 
   return {
     id: body.id || crypto.randomUUID(),
     name,
     enabled: body.enabled !== false && body.enabled !== 'false',
-    trigger: { event, match, conditions },
+    trigger: { event, match: triggerCondition.match, conditions: triggerCondition.conditions, ...(chatScope ? { chatScope } : {}) },
     action,
     runCount: Math.max(0, Number(body.runCount) || 0),
     lastRunAt: body.lastRunAt || null,
@@ -338,6 +391,7 @@ function interpolate(template, ctx) {
     chatId: ctx?.chatId || '',
     groupName: ctx?.groupName || '',
     text: ctx?.text || '',
+    deletedText: ctx?.deletedText || '',
     reaction: ctx?.reaction || '',
     mediaType: ctx?.mediaType || '',
     type: ctx?.type || '',
@@ -346,9 +400,14 @@ function interpolate(template, ctx) {
     actor: ctx?.actor || '',
     participant: ctx?.participant || '',
     recoveryStatus: ctx?.recoveryStatus || '',
+    isGroup: ctx?.isGroup ? 'true' : 'false',
+    callType: ctx?.callKind || (ctx?.isVideo ? 'video' : ''),
+    messageId: ctx?.messageId || ctx?.id || '',
+    timestamp: ctx?.timestamp ? new Date(ctx.timestamp * 1000).toLocaleString() : new Date().toLocaleString(),
     time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    date: new Date().toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' }),
   };
-  return String(template || '').replace(/\{(name|contactName|number|from|chatId|groupName|text|reaction|mediaType|type|quotedText|action|actor|participant|recoveryStatus|time)\}/g, (_, key) => values[key]);
+  return String(template || '').replace(/\{(name|contactName|number|from|chatId|groupName|text|deletedText|reaction|mediaType|type|quotedText|action|actor|participant|recoveryStatus|isGroup|callType|messageId|timestamp|time|date)\}/g, (_, key) => values[key]);
 }
 
 // Contact name sources, arranged so the WhatsApp profile name and the saved
@@ -397,6 +456,8 @@ function resolveContext(message, overrides = {}) {
     from,
     sender: idOf(source?.author) || from,
     chatId,
+    messageId: idOf(source?.id) || '',
+    timestamp: Number(source?.timestamp ?? source?.t) || Math.floor(Date.now() / 1000),
     isGroup: groupJid || idOf(source?.isGroupMsg) === 'true' || source?.isGroupMsg === true || source?.isGroup === true,
     fromMe: source?.fromMe === true || source?.isSentByMe === true,
     text,
@@ -474,6 +535,7 @@ function buildContext(event, data, env = {}) {
       })(),
     });
     ctx.recoveryStatus = payload.recoveryStatus || 'not-observed';
+    ctx.deletedText = ctx.text;
     return ctx;
   }
 
@@ -660,12 +722,35 @@ function matchValue(op, actual, expected) {
   }
 }
 
+// Evaluate one node (leaf condition OR nested group) against a context, and
+// collect the leaf-level results for the UI test panel.
+function evaluateConditionNode(node, ctx, into) {
+  // Group node (nested conditions): recursively evaluate children, combine
+  // with its own all/any policy.
+  if (!node.field) {
+    const children = (node.conditions || []).map(child => evaluateConditionNode(child, ctx, into));
+    if (!children.length) return false;
+    return node.match === 'any' ? children.some(Boolean) : children.every(Boolean);
+  }
+  const passed = matchValue(node.op, fieldValue(ctx, node.field), node.value);
+  into.push({ ...node, passed });
+  return passed;
+}
+
 function evaluateRule(rule, ctx) {
-  const results = (rule.trigger.conditions || []).map((condition) => {
-    const passed = matchValue(condition.op, fieldValue(ctx, condition.field), condition.value);
-    return { ...condition, passed };
+  const results = [];
+  const top = rule.trigger.conditions || [];
+  if (top.length && top[0] && !top[0].field) {
+    // New tree shape: root of the condition tree.
+    const matched = evaluateConditionNode(top[0], ctx, results);
+    return { matched, conditions: results };
+  }
+  const passed = (top).map(condition => {
+    const matching = matchValue(condition.op, fieldValue(ctx, condition.field), condition.value);
+    results.push({ ...condition, passed: matching });
+    return matching;
   });
-  const matched = rule.trigger.match === 'any' ? results.some(r => r.passed) : results.every(r => r.passed);
+  const matched = rule.trigger.match === 'any' ? passed.some(Boolean) : passed.every(Boolean);
   return { matched, conditions: results };
 }
 
@@ -734,9 +819,15 @@ class AutomationService {
   }
 
   // ---- Public CRUD ----------------------------------------------------
-  list(apiKey) {
+  list(apiKey, chatId) {
     const store = this._store(apiKey, false);
     if (!store) return [];
+    if (chatId) {
+      // Per-chat management: return rules scoped to that chat (scoped OR
+      // global). Global rules apply everywhere, so they belong in the modal
+      // too - the "make it specific" option is just one click away.
+      return store.rules.filter(r => !r.trigger.chatScope || r.trigger.chatScope === chatId);
+    }
     return store.rules;
   }
 
@@ -820,6 +911,8 @@ class AutomationService {
     let changed = false;
     for (const rule of store.rules) {
       if (!rule.enabled || rule.trigger.event !== event) continue;
+      // Per-chat scoped rules only fire for their chat.
+      if (rule.trigger.chatScope && ctx.chatId && String(rule.trigger.chatScope) !== String(ctx.chatId)) continue;
       const { matched } = evaluateRule(rule, ctx);
       if (!matched) continue;
       rule.runCount = (rule.runCount || 0) + 1;
@@ -870,8 +963,27 @@ class AutomationService {
         await whatsappService.sendMessage(apiKey, to, interpolate(action.text, ctx), quotedId ? { quotedMessageId: quotedId } : undefined);
         break;
       case 'send_media': {
-        const dataUrl = await resolveMediaSource(action.media);
-        await whatsappService.sendFile(apiKey, to, dataUrl, action.filename || 'media', interpolate(action.caption || '', ctx) || undefined);
+        const mediaSource = interpolate(action.media, ctx);
+        let dataUrl = mediaSource;
+        let filename = action.filename || 'media';
+        if (mediaSource === '{eventMedia}' || mediaSource === '{deletedMedia}') {
+          const targetMediaId = event === 'message.deleted' ? ctx.messageId : rawId;
+          if (targetMediaId && ctx.hasMedia) {
+             const m = await whatsappService.downloadMedia(apiKey, targetMediaId).catch(() => null);
+             if (m?.dataUrl) {
+                dataUrl = m.dataUrl;
+                filename = m.filename || filename;
+             }
+          }
+        }
+        if (dataUrl === '{eventMedia}' || dataUrl === '{deletedMedia}') {
+          console.warn(`[automation] send_media: No media available on the event to resolve ${mediaSource}`);
+          break;
+        }
+        if (!/^data:/.test(dataUrl)) {
+          dataUrl = await resolveMediaSource(dataUrl);
+        }
+        await whatsappService.sendFile(apiKey, to, dataUrl, filename, interpolate(action.caption || '', ctx) || undefined);
         break;
       }
       case 'send_reaction':
@@ -880,7 +992,8 @@ class AutomationService {
         break;
       case 'forward_to': {
         const dest = await whatsappService.resolveDestination(apiKey, action.to);
-        const media = rawMessage ? await whatsappService.downloadMedia(apiKey, rawId).catch(() => null) : null;
+        const targetMediaId = event === 'message.deleted' ? ctx.messageId : rawId;
+        const media = (targetMediaId && ctx.hasMedia) ? await whatsappService.downloadMedia(apiKey, targetMediaId).catch(() => null) : null;
         if (ctx.hasMedia && media?.dataUrl) {
           await whatsappService.sendFile(apiKey, dest, media.dataUrl, media.filename || 'media', ctx.text);
         } else if (ctx.text) {
@@ -905,6 +1018,9 @@ class AutomationService {
         defaultCondition: EVENT_DEFAULT_CONDITION(id),
       })),
       maxConditions: 10,
+      maxGroupDepth: 3,
+      supportsGroups: true,
+      supportsChatScope: true,
       fields: FIELDS.map(field => ({ field, label: FIELD_META[field]?.label || field, hint: FIELD_META[field]?.hint || '' })),
       operators: OPS_BY_FIELD,
       operatorMeta: OP_META,

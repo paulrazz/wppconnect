@@ -24,7 +24,28 @@ db.serialize(() => {
       api_key TEXT UNIQUE NOT NULL,
       recovery_code TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
+    );
+    CREATE TABLE IF NOT EXISTS events (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      chat_id TEXT,
+      sender_id TEXT,
+      timestamp DATETIME,
+      recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      data TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
+    CREATE INDEX IF NOT EXISTS idx_events_chat_id ON events(chat_id);
+    CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
+    
+    CREATE TABLE IF NOT EXISTS media_cache (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      data_url TEXT NOT NULL,
+      mimetype TEXT,
+      filename TEXT,
+      fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 });
 

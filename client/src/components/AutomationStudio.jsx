@@ -17,10 +17,10 @@ const inputCls = (theme) =>
       : 'bg-slate-50 border-slate-300 text-slate-800 placeholder-slate-400'
   }`;
 
-const emptyDraft = () => ({
+const emptyDraft = (chatScope) => ({
   name: '',
   enabled: true,
-  trigger: { event: 'message.received', match: 'all', conditions: [{ field: 'text', op: 'contains', value: '' }] },
+  trigger: { event: 'message.received', match: 'all', conditions: [{ field: 'text', op: 'contains', value: '' }], ...(chatScope ? { chatScope } : {}) },
   action: { type: 'send_text', text: '', quoted: true, delay: 0 },
 });
 
@@ -35,6 +35,19 @@ const normalizeRule = (rule) => {
     trigger: { ...trigger, match: trigger.match === 'any' ? 'any' : 'all' },
   };
 };
+
+// Count leaf conditions across a tree (root array or nested group).
+const countLeaves = (conds) => (conds || []).reduce((n, c) => n + (c.field ? 1 : countLeaves(c.conditions)), 0);
+// True when the tree contains at least one populated leaf value.
+const hasAnyValue = (conds) => (conds || []).some(c => c.field ? (c.value !== '' && c.value != null) : hasAnyValue(c.conditions));
+// Walk `path` (array of child indexes) to find the node at that position.
+const getNode = (conditions, path) => {
+  let node = conditions[path[0]];
+  for (let i = 1; i < path.length; i++) node = node.conditions[path[i]];
+  return node;
+};
+// The child array that owns a path (root array for [], a group's children otherwise).
+const getContainer = (conditions, path) => (path.length ? getNode(conditions, path).conditions : conditions);
 
 function Chip({ active, tone = 'indigo', children }) {
   const tones = {
@@ -66,20 +79,170 @@ function ActionBadge({ rule, theme }) {
 }
 
 function ConditionLabel({ condition, fieldLabel, opLabel }) {
+  // Nested group: render "( … )" with its own all/any joiner between children.
+  if (condition.conditions) {
+    return (
+      <span className="font-mono text-xs">
+        <span className="text-violet-400">(</span>
+        {condition.conditions.map((c, i) => (
+          <span key={i}>
+            {i > 0 && (
+              <span className={`mx-1 text-[10px] font-black ${condition.match === 'all' ? 'text-indigo-400' : 'text-amber-400'}`}>
+                {condition.match === 'all' ? 'AND' : 'OR'}
+              </span>
+            )}
+            <ConditionLabel condition={c} fieldLabel={fieldLabel} opLabel={opLabel} />
+          </span>
+        ))}
+        <span className="text-violet-400">)</span>
+      </span>
+    );
+  }
   const value =
     typeof condition.value === 'boolean' ? (condition.value ? 'true' : 'false')
     : Array.isArray(condition.value) ? condition.value.join(', ')
     : String(condition.value ?? '');
   return (
     <span className="font-mono text-xs">
-      <span className="text-sky-400">{fieldLabel}</span>
+      <span className="text-sky-400">{typeof fieldLabel === 'function' ? fieldLabel(condition.field) : fieldLabel}</span>
       <span className={opLabel === 'is_true' || opLabel === 'is_false' ? 'text-violet-400' : 'text-indigo-400'}> {opLabel}</span>
       {value && <span className="text-emerald-400"> “{value.length > 24 ? `${value.slice(0, 24)}…` : value}”</span>}
     </span>
   );
 }
 
-export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
+// Recursive condition editor: renders a leaf row (field/op/value) OR a nested
+// group box (its own all/any joiner + child conditions). `path` tracks the
+// child indexes from the root so edits hit the exact node. Nesting supports
+// "(A and B) or (C and D)" - the whole point of groups.
+function ConditionNodeEditor({
+  node, path, label, match, depth,
+  spec, eventFields, theme,
+  fieldLabel, opLabel, isBoolField,
+  updateNode, removeNode, addLeaf, addGroup, canRemoveAll,
+}) {
+  if (!node?.conditions) {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`text-[10px] font-black uppercase w-8 ${match === 'all' ? 'text-indigo-400' : 'text-amber-400'}`}>{label}</span>
+        <select
+          value={node.field}
+          onChange={e => {
+            const field = e.target.value;
+            const ops = spec.operators[field] || ['equals'];
+            updateNode(path, { field, op: isBoolField(field) ? 'is_true' : ops[0], value: isBoolField(field) ? true : '' });
+          }}
+          className={`rounded-lg border text-sm px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-500/50 ${theme === 'dark' ? 'bg-[#0a0c10] border-[#262931] text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-800'}`}
+        >
+          {eventFields.map(f => <option key={f.field} value={f.field}>{f.label}</option>)}
+        </select>
+        <select
+          value={node.op}
+          onChange={e => updateNode(path, { op: e.target.value })}
+          className={`rounded-lg border text-sm px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-500/50 ${theme === 'dark' ? 'bg-[#0a0c10] border-[#262931] text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-800'}`}
+        >
+          {(spec.operators[node.field] || []).map(op => <option key={op} value={op}>{opLabel(op)}</option>)}
+        </select>
+        {isBoolField(node.field) ? (
+          <select
+            value={node.value ? 'true' : 'false'}
+            onChange={e => updateNode(path, { value: e.target.value === 'true' })}
+            className={`rounded-lg border text-sm px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-500/50 ${theme === 'dark' ? 'bg-[#0a0c10] border-[#262931] text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-800'}`}
+          >
+            <option value="true">true</option>
+            <option value="false">false</option>
+          </select>
+        ) : (
+          <input
+            value={node.value}
+            onChange={e => updateNode(path, { value: e.target.value })}
+            placeholder={spec.operatorMeta[node.op]?.example || 'value'}
+            className={`${inputCls(theme)} flex-1 min-w-[160px]`}
+          />
+        )}
+        <button
+          onClick={() => removeNode(path)}
+          disabled={canRemoveAll}
+          className={`p-2 rounded-lg transition-colors disabled:opacity-30 ${theme === 'dark' ? 'text-slate-500 hover:text-rose-400 hover:bg-rose-500/10' : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'}`}
+          title="Remove condition"
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
+      </div>
+    );
+  }
+
+  // Nested group box
+  return (
+    <div className={`rounded-xl border ${theme === 'dark' ? 'border-violet-500/30 bg-[#0a0c10]/60' : 'border-violet-300 bg-violet-50/40'}`}>
+      <div className={`flex items-center gap-2 rounded-t-xl border-b px-3 py-1.5 ${theme === 'dark' ? 'border-[#262931]' : 'border-slate-200'}`}>
+        <span className={`text-[10px] font-black uppercase ${match === 'all' ? 'text-indigo-400' : 'text-amber-400'}`}>{label}</span>
+        <span className={`text-[10px] font-black uppercase tracking-wider ${theme === 'dark' ? 'text-violet-400' : 'text-violet-600'}`}>Group</span>
+        <div className={`ml-1 flex items-center rounded-md border overflow-hidden text-[10px] ${theme === 'dark' ? 'border-[#262931]' : 'border-slate-300'}`}>
+          <button
+            onClick={() => updateNode(path, { match: 'all' })}
+            className={`px-2 py-0.5 font-bold transition-colors ${node.match === 'all' ? (theme === 'dark' ? 'bg-indigo-500/20 text-indigo-300' : 'bg-indigo-100 text-indigo-700') : (theme === 'dark' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-700')}`}
+          >ALL</button>
+          <button
+            onClick={() => updateNode(path, { match: 'any' })}
+            className={`px-2 py-0.5 font-bold transition-colors ${node.match === 'any' ? (theme === 'dark' ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700') : (theme === 'dark' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-700')}`}
+          >ANY</button>
+        </div>
+        <button
+          onClick={() => removeNode(path)}
+          disabled={canRemoveAll}
+          className={`ml-auto p-1.5 rounded-lg transition-colors disabled:opacity-30 ${theme === 'dark' ? 'text-slate-500 hover:text-rose-400 hover:bg-rose-500/10' : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'}`}
+          title="Remove group"
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
+      </div>
+      <div className="space-y-2 p-3">
+        {node.conditions.map((child, i) => (
+          <ConditionNodeEditor
+            key={i}
+            node={child}
+            path={[...path, i]}
+            label={i === 0 ? 'If' : (node.match === 'all' ? 'And' : 'Or')}
+            match={node.match}
+            depth={depth + 1}
+            spec={spec}
+            eventFields={eventFields}
+            theme={theme}
+            fieldLabel={fieldLabel}
+            opLabel={opLabel}
+            isBoolField={isBoolField}
+            updateNode={updateNode}
+            removeNode={removeNode}
+            addLeaf={addLeaf}
+            addGroup={addGroup}
+            canRemoveAll={canRemoveAll}
+          />
+        ))}
+      </div>
+      <div className="flex items-center gap-2 px-3 pb-2">
+        <button
+          onClick={() => addLeaf(path)}
+          disabled={countLeaves(node.conditions) >= (spec.maxConditions || 10)}
+          className={`inline-flex items-center px-2 py-1 rounded-lg text-[10px] font-semibold transition-colors disabled:opacity-40 ${theme === 'dark' ? 'text-violet-300 hover:bg-violet-500/10' : 'text-violet-600 hover:bg-violet-50'}`}
+        >
+          <Plus className="w-3 h-3 mr-1" /> Condition
+        </button>
+        {depth < (spec.maxGroupDepth || 3) - 1 && (
+          <button
+            onClick={() => addGroup(path)}
+            disabled={countLeaves(node.conditions) >= (spec.maxConditions || 10)}
+            className={`inline-flex items-center px-2 py-1 rounded-lg text-[10px] font-semibold transition-colors disabled:opacity-40 ${theme === 'dark' ? 'text-slate-400 hover:text-slate-200 hover:bg-[#1e222b]' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'}`}
+          >
+            <Layers className="w-3 h-3 mr-1" /> Nested group
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function AutomationStudio({ apiKey, theme, onDraftChange, initialChatScope }) {
   const [rules, setRules] = useState([]);
   const [spec, setSpec] = useState(null);
   const [draft, setDraft] = useState(null);
@@ -109,34 +272,53 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
     if (onDraftChange) onDraftChange(draft);
   }, [onDraftChange, draft]);
 
-  const startNew = () => { setEditingId(null); setDraft(emptyDraft()); setMsg(null); };
+  const startNew = () => { setEditingId(null); setDraft(emptyDraft(initialChatScope)); setMsg(null); };
   const startEdit = (rule) => { setEditingId(rule.id); setDraft(normalizeRule(JSON.parse(JSON.stringify(rule)))); setMsg(null); };
 
   const patchDraft = (patch) => setDraft(prev => ({ ...(prev || emptyDraft()), ...patch }));
   const patchTrigger = (patch) => setDraft(prev => ({ ...prev, trigger: { ...prev.trigger, ...patch } }));
   const patchAction = (patch) => setDraft(prev => ({ ...prev, action: { ...prev.action, ...patch } }));
 
-  const updateCondition = (index, patch) => setDraft(prev => {
-    const conditions = prev.trigger.conditions.map((c, i) => (i === index ? { ...c, ...patch } : c));
+  // Path-based condition tree mutations (path = child indexes from the root).
+  const updateNode = (path, patch) => setDraft(prev => {
+    const conditions = JSON.parse(JSON.stringify(prev.trigger.conditions || []));
+    const node = getNode(conditions, path);
+    Object.assign(node, patch);
     return { ...prev, trigger: { ...prev.trigger, conditions } };
   });
 
-  const addCondition = () => setDraft(prev => {
-    const meta = spec?.events?.find(e => e.id === prev.trigger.event);
-    const condition = meta?.defaultCondition || prev.trigger.conditions[prev.trigger.conditions.length - 1] || { field: 'sender', op: 'equals', value: '' };
-    return { ...prev, trigger: { ...prev.trigger, conditions: [...prev.trigger.conditions, { ...condition, value: typeof condition.value === 'boolean' ? false : '' }] } };
+  const removeNode = (path) => setDraft(prev => {
+    const conditions = JSON.parse(JSON.stringify(prev.trigger.conditions || []));
+    const container = getContainer(conditions, path);
+    container.splice(path[path.length - 1], 1);
+    return { ...prev, trigger: { ...prev.trigger, conditions } };
   });
 
-  const removeCondition = (index) => setDraft(prev => ({
-    ...prev,
-    trigger: { ...prev.trigger, conditions: prev.trigger.conditions.filter((_, i) => i !== index) },
-  }));
+  const addLeaf = (path) => setDraft(prev => {
+    const meta = spec?.events?.find(e => e.id === prev.trigger.event);
+    const conditions = JSON.parse(JSON.stringify(prev.trigger.conditions || []));
+    const container = getContainer(conditions, path);
+    const condition = { ...(meta?.defaultCondition || { field: 'sender', op: 'equals', value: '' }) };
+    if (typeof condition.value !== 'boolean') condition.value = '';
+    container.push(condition);
+    return { ...prev, trigger: { ...prev.trigger, conditions } };
+  });
+
+  const addGroup = (path) => setDraft(prev => {
+    const meta = spec?.events?.find(e => e.id === prev.trigger.event);
+    const conditions = JSON.parse(JSON.stringify(prev.trigger.conditions || []));
+    const container = getContainer(conditions, path);
+    const leaf = { ...(meta?.defaultCondition || { field: 'sender', op: 'equals', value: '' }) };
+    if (typeof leaf.value !== 'boolean') leaf.value = '';
+    container.push({ match: 'all', conditions: [leaf] });
+    return { ...prev, trigger: { ...prev.trigger, conditions } };
+  });
 
   const fieldLabel = (field) => spec?.fields?.find(f => f.field === field)?.label || field;
   const opLabel = (op) => spec?.operatorMeta?.[op]?.label || op;
 
   const save = async () => {
-    if (!draft || !draft.name.trim() || !draft.trigger?.conditions?.some(c => c.value !== '' || typeof c.value === 'boolean')) {
+    if (!draft || !draft.name.trim() || !hasAnyValue(draft.trigger?.conditions)) {
       setMsg({ ok: false, text: 'Give the rule a name and at least one populated condition.' });
       return;
     }
@@ -298,14 +480,20 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
                           <span className={`text-xs italic ${theme === 'dark' ? 'text-slate-600' : 'text-slate-400'}`}>
                             {rule.trigger.event === 'message.received' ? 'Any incoming message' : (spec.events.find(e => e.id === rule.trigger.event)?.label || rule.trigger.event)}
                           </span>
-                        ) : rule.trigger.conditions.map((c, i) => (
-                          <span key={i} className="flex items-center gap-1.5">
-                            {i > 0 && (
-                              <span className={`text-[10px] font-black uppercase ${rule.trigger.match === 'all' ? 'text-indigo-400' : 'text-amber-400'}`}>{rule.trigger.match === 'all' ? 'AND' : 'OR'}</span>
-                            )}
-                            <ConditionLabel condition={c} fieldLabel={fieldLabel(c.field)} opLabel={opLabel(c.op)} />
+                        ) : (
+                          <span className="flex flex-wrap items-center gap-1.5">
+                            <ConditionLabel condition={rule.trigger.conditions[0]} fieldLabel={fieldLabel} opLabel={opLabel} />
+                            {rule.trigger.conditions.slice(1).map((c, i) => (
+                              <span key={i} className="flex items-center gap-1.5">
+                                <span className={`text-[10px] font-black uppercase ${rule.trigger.match === 'all' ? 'text-indigo-400' : 'text-amber-400'}`}>{rule.trigger.match === 'all' ? 'AND' : 'OR'}</span>
+                                <ConditionLabel condition={c} fieldLabel={fieldLabel} opLabel={opLabel} />
+                              </span>
+                            ))}
                           </span>
-                        ))}
+                        )}
+                        {rule.trigger.chatScope && (
+                          <Chip active tone="indigo">In: {rule.trigger.chatScope.split('@')[0]}</Chip>
+                        )}
                       </div>
                       <ActionBadge rule={rule} theme={theme} />
                       <div className="flex flex-wrap items-center gap-3 mt-0.5">
@@ -425,87 +613,78 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
                 )}
               </div>
               <div className={`rounded-b-xl border overflow-hidden ${theme === 'dark' ? 'border-[#262931]' : 'border-slate-300'}`}>
-                <div className="space-y-2 p-4">
-                  {draft.trigger.conditions.map((condition, index) => (
-                    <div key={index} className="flex flex-wrap items-center gap-2">
-                      <span className={`text-[10px] font-black uppercase w-8 ${draft.trigger.match === 'all' ? (index === 0 ? 'text-slate-500' : 'text-indigo-400') : (index === 0 ? 'text-slate-500' : 'text-amber-400')}`}>
-                        {index === 0 ? 'If' : draft.trigger.match === 'all' ? 'And' : 'Or'}
-                      </span>
-                      <select
-                        value={condition.field}
-                        onChange={e => {
-                          const field = e.target.value;
-                          const ops = spec.operators[field] || ['equals'];
-                          updateCondition(index, { field, op: isBoolField(field) ? 'is_true' : ops[0], value: isBoolField(field) ? true : '' });
-                        }}
-                        className={`rounded-lg border text-sm px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-500/50 ${theme === 'dark' ? 'bg-[#0a0c10] border-[#262931] text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-800'}`}
-                      >
-                        {eventFields.map(f => <option key={f.field} value={f.field}>{f.label}</option>)}
-                      </select>
-                      <select
-                        value={condition.op}
-                        onChange={e => updateCondition(index, { op: e.target.value })}
-                        className={`rounded-lg border text-sm px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-500/50 ${theme === 'dark' ? 'bg-[#0a0c10] border-[#262931] text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-800'}`}
-                      >
-                        {(spec.operators[condition.field] || []).map(op => <option key={op} value={op}>{opLabel(op)}</option>)}
-                      </select>
-                      {isBoolField(condition.field) ? (
-                        <select
-                          value={condition.value ? 'true' : 'false'}
-                          onChange={e => updateCondition(index, { value: e.target.value === 'true' })}
-                          className={`rounded-lg border text-sm px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-500/50 ${theme === 'dark' ? 'bg-[#0a0c10] border-[#262931] text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-800'}`}
-                        >
-                          <option value="true">true</option>
-                          <option value="false">false</option>
-                        </select>
-                      ) : (
-                        <input
-                          value={condition.value}
-                          onChange={e => updateCondition(index, { value: e.target.value })}
-                          placeholder={spec.operatorMeta[condition.op]?.example || 'value'}
-                          className={`${inputCls(theme)} flex-1 min-w-[160px]`}
-                        />
-                      )}
-                      <button
-                        onClick={() => removeCondition(index)}
-                        disabled={draft.trigger.conditions.length <= 1}
-                        className={`p-2 rounded-lg transition-colors disabled:opacity-30 ${theme === 'dark' ? 'text-slate-500 hover:text-rose-400 hover:bg-rose-500/10' : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'}`}
-                        title="Remove condition"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
-                  <div className="flex items-center gap-3 pt-1">
-                    <button
-                      onClick={addCondition}
-                      disabled={draft.trigger.conditions.length >= (spec.maxConditions || 10)}
-                      className={`inline-flex items-center px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-40 ${theme === 'dark' ? 'text-indigo-300 hover:bg-indigo-500/10' : 'text-indigo-600 hover:bg-indigo-50'}`}
-                    >
-                      <Plus className="w-3.5 h-3.5 mr-1" /> Add condition
-                    </button>
-                    <div className={`flex items-center rounded-lg border overflow-hidden text-xs ${theme === 'dark' ? 'border-[#262931]' : 'border-slate-300'}`}>
-                      <button
-                        onClick={() => patchTrigger({ match: 'all' })}
-                        className={`px-3 py-1.5 font-semibold transition-colors ${draft.trigger.match === 'all' ? (theme === 'dark' ? 'bg-indigo-500/20 text-indigo-300' : 'bg-indigo-100 text-indigo-700') : (theme === 'dark' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-700')}`}
-                      >
-                        ALL must match
-                      </button>
-                      <button
-                        onClick={() => patchTrigger({ match: 'any' })}
-                        className={`px-3 py-1.5 font-semibold transition-colors ${draft.trigger.match === 'any' ? (theme === 'dark' ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700') : (theme === 'dark' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-700')}`}
-                      >
-                        ANY may match
-                      </button>
-                    </div>
-                    {spec.fields.find(f => f.field === (draft.trigger.conditions[draft.trigger.conditions.length - 1]?.field))?.hint && (
-                      <p className={`text-[10px] ${theme === 'dark' ? 'text-slate-600' : 'text-slate-400'}`}>
-                        {spec.fields.find(f => f.field === draft.trigger.conditions[draft.trigger.conditions.length - 1].field).hint}
-                      </p>
-                    )}
-                  </div>
-                </div>
+          <div className="space-y-2 p-4">
+            {draft.trigger.conditions.map((condition, index) => (
+              <ConditionNodeEditor
+                key={index}
+                node={condition}
+                path={[index]}
+                label={index === 0 ? 'If' : (draft.trigger.match === 'all' ? 'And' : 'Or')}
+                match={draft.trigger.match}
+                depth={0}
+                spec={spec}
+                eventFields={eventFields}
+                theme={theme}
+                fieldLabel={fieldLabel}
+                opLabel={opLabel}
+                isBoolField={isBoolField}
+                updateNode={updateNode}
+                removeNode={removeNode}
+                addLeaf={addLeaf}
+                addGroup={addGroup}
+                canRemoveAll={countLeaves(draft.trigger.conditions) <= 1}
+              />
+            ))}
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <button
+                onClick={() => addLeaf([])}
+                disabled={countLeaves(draft.trigger.conditions) >= (spec.maxConditions || 10)}
+                className={`inline-flex items-center px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-40 ${theme === 'dark' ? 'text-indigo-300 hover:bg-indigo-500/10' : 'text-indigo-600 hover:bg-indigo-50'}`}
+              >
+                <Plus className="w-3.5 h-3.5 mr-1" /> Add condition
+              </button>
+              <button
+                onClick={() => addGroup([])}
+                disabled={countLeaves(draft.trigger.conditions) >= (spec.maxConditions || 10)}
+                className={`inline-flex items-center px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-40 ${theme === 'dark' ? 'text-slate-400 hover:text-slate-200 hover:bg-[#1e222b]' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'}`}
+              >
+                <Layers className="w-3.5 h-3.5 mr-1" /> Add group
+              </button>
+              <div className={`flex items-center rounded-lg border overflow-hidden text-xs ${theme === 'dark' ? 'border-[#262931]' : 'border-slate-300'}`}>
+                <button
+                  onClick={() => patchTrigger({ match: 'all' })}
+                  className={`px-3 py-1.5 font-semibold transition-colors ${draft.trigger.match === 'all' ? (theme === 'dark' ? 'bg-indigo-500/20 text-indigo-300' : 'bg-indigo-100 text-indigo-700') : (theme === 'dark' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-700')}`}
+                >
+                  ALL must match
+                </button>
+                <button
+                  onClick={() => patchTrigger({ match: 'any' })}
+                  className={`px-3 py-1.5 font-semibold transition-colors ${draft.trigger.match === 'any' ? (theme === 'dark' ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700') : (theme === 'dark' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-700')}`}
+                >
+                  ANY may match
+                </button>
               </div>
+            </div>
+            {draft.trigger.chatScope && (
+              <div className={`flex items-center gap-2 text-[10px] px-3 py-1.5 rounded-lg border ${theme === 'dark' ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-300' : 'bg-indigo-50 border-indigo-200 text-indigo-700'}`}>
+                <Sparkles className="w-3 h-3 shrink-0" />
+                Only fires in chat <span className="font-mono">{draft.trigger.chatScope}</span>
+                <button onClick={() => patchTrigger({ chatScope: null })} className={`ml-auto font-bold hover:underline ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>Remove scope</button>
+              </div>
+            )}
+            <div className="flex items-center gap-2 pt-1">
+              <label className={`text-[10px] font-semibold whitespace-nowrap ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+                Scope to chat (optional)
+              </label>
+              <input
+                value={draft.trigger.chatScope || ''}
+                onChange={e => patchTrigger({ chatScope: e.target.value || null })}
+                placeholder="e.g. 2348012345678@c.us or a group ID"
+                className={`${inputCls(theme)} font-mono text-[11px] sm:max-w-[280px]`}
+              />
+            </div>
+          </div>
+        </div>
             </div>
 
             {/* THEN */}
@@ -623,7 +802,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange }) {
               )}
             </div>
 
-            {draft.trigger.conditions.some(c => c.op === 'matches_regex') && (
+            {(function hasRegex(nodes) { return (nodes || []).some(c => c.op === 'matches_regex' || (c.conditions && hasRegex(c.conditions))); })(draft.trigger.conditions) && (
               <div className={`mt-4 px-4 py-3 rounded-lg border text-xs flex items-center gap-2 ${theme === 'dark' ? 'bg-amber-500/5 border-amber-500/20 text-amber-400/90' : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
                 <AlertTriangle className="w-4 h-4 shrink-0" />
                 Regular expressions are evaluated on every message. Keep patterns simple and anchor them (e.g. ^…) to avoid surprises.

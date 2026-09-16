@@ -49,9 +49,9 @@ router.get('/statuses', async (req, res) => {
   ok(res, { items: await whatsapp.getStatuses(res.locals.apiKey), privacyMode: 'no-read-receipts' });
 });
 router.get('/media/:messageId', async (req, res) => ok(res, await whatsapp.downloadMedia(res.locals.apiKey, req.params.messageId)));
-router.get('/events', (req, res) => ok(res, whatsapp.getEvents(req.query)));
-router.get('/deleted-messages', (req, res) => ok(res, whatsapp.getDeletedMessages(req.query)));
-router.get('/deletions', (req, res) => ok(res, whatsapp.getDeletions(req.query)));
+router.get('/events', async (req, res) => ok(res, await whatsapp.getEvents(req.query)));
+router.get('/deleted-messages', async (req, res) => ok(res, await whatsapp.getDeletedMessages(req.query)));
+router.get('/deletions', async (req, res) => ok(res, await whatsapp.getDeletions(req.query)));
 
 router.post('/messages/text', async (req, res) => {
   const text = String(req.body.text || '').trim();
@@ -101,7 +101,10 @@ router.delete('/webhooks/:id', (req, res) => {
 });
 
 // ---- Automation rules (visual playground) ----------------------------
-router.get('/automation', (_req, res) => ok(res, automation.list(res.locals.apiKey)));
+router.get('/automation', (req, res) => {
+  const chatId = typeof req.query.chatId === 'string' ? req.query.chatId.trim() : '';
+  ok(res, automation.list(res.locals.apiKey, chatId || undefined));
+});
 router.get('/automation/spec', (_req, res) => ok(res, automation.spec()));
 router.post('/automation', (req, res) => ok(res, automation.create(res.locals.apiKey, req.body || {}), 201));
 router.put('/automation/:id', (req, res) => {

@@ -23,8 +23,10 @@ export default function Login() {
     setLoading(true); setError(''); setSuccessMsg('');
     try {
       const res = await axios.post(`${API_URL}/auth/login`, { phone, password });
-      await setApiKey(res.data.data.apiKey);
-      liveStream.connect(res.data.data.apiKey);
+      const key = res.data.data.apiKey;
+      await setApiKey(key);
+      axios.defaults.headers.common['x-api-key'] = key;
+      liveStream.connect(key);
       navigate('/');
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to connect to server.');
@@ -37,8 +39,10 @@ export default function Login() {
     setLoading(true); setError(''); setSuccessMsg('');
     try {
       const res = await axios.post(`${API_URL}/auth/signup`, { phone, password });
-      await setApiKey(res.data.data.apiKey);
-      liveStream.connect(res.data.data.apiKey);
+      const key = res.data.data.apiKey;
+      await setApiKey(key);
+      axios.defaults.headers.common['x-api-key'] = key;
+      liveStream.connect(key);
       setSuccessMsg(`ACCOUNT CREATED! Please save this Recovery Code to reset your password if you forget it: ${res.data.data.recoveryCode}`);
       // Don't navigate immediately so they can see the code.
       setLoading(false);
@@ -53,7 +57,10 @@ export default function Login() {
     setLoading(true); setError(''); setSuccessMsg('');
     try {
       const res = await axios.post(`${API_URL}/auth/reset-password`, { phone, recoveryCode, newPassword: password });
-      await setApiKey(res.data.data.apiKey);
+      const key = res.data.data.apiKey;
+      await setApiKey(key);
+      axios.defaults.headers.common['x-api-key'] = key;
+      liveStream.connect(key);
       setSuccessMsg(`Password reset! Your NEW Recovery Code is: ${res.data.data.newRecoveryCode}.`);
       setLoading(false);
     } catch (err) {

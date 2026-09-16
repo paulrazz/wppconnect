@@ -3,12 +3,14 @@ import axios from 'axios';
 import { getApiKey } from '../auth';
 import liveStream from '../liveStream';
 import { sessionStore } from '../sessionStore';
-import { safeMessageText, messagePreview } from '../messageText';
+import { safeMessageText, messagePreview, viewOnceInnerType } from '../messageText';
 import { useTheme } from '../ThemeContext';
 import { UserCircle, Search, MessageSquare, LoaderCircle, Lock, Reply, SmilePlus, Download, FileText, MapPin } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import ChatInputForm from '../components/ChatInputForm';
 import EmojiPicker from '../components/EmojiPicker';
+import ChatAutomationsModal from '../components/ChatAutomationsModal';
+import { Zap } from 'lucide-react';
 
 const SERVER_URL = (import.meta.env.VITE_WPPCONNECT_URL || '').replace(/\/$/, '');
 const API_URL = `${SERVER_URL}/api`;
@@ -124,7 +126,7 @@ function fetchMedia(id, apiKey) {
 function MediaContent({ message, apiKey, theme, className = '' }) {
   const [data, setData] = useState(null);
   const [unavailable, setUnavailable] = useState(false);
-  const type = String(message.type || '').toLowerCase();
+  const type = viewOnceInnerType(message);
 
   const [error, setError] = useState(null);
   const [attempts, setAttempts] = useState(0);
@@ -198,7 +200,7 @@ function ChatAvatar({ pic, size = 32, theme }) {
 
 function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReact, activeChatId }) {
   const [showReactions, setShowReactions] = useState(false);
-  const type = String(message.type || 'chat').toLowerCase();
+  const type = viewOnceInnerType(message);
   const isMe = message.fromMe || message.isSentByMe || message.isSendByMe;
   const isMedia = MEDIA_TYPES.includes(type);
   const isDeleted = message.isDeleted || message.isRevoked || type === 'revoked';
@@ -215,10 +217,16 @@ function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReac
     const text = safeMessageText(q);
     if (!text && !q.filename) return null;
     const who = q.fromMe ? 'You' : (q.senderName || q.notifyName || q.author || q.pushname || (typeof q.from === 'string' ? q.from.split('@')[0] : 'Contact'));
-    return { who, text, hasMedia: MEDIA_TYPES.includes(String(q.type || '').toLowerCase()) };
+    return { who, text, hasMedia: MEDIA_TYPES.includes(viewOnceInnerType(q)) };
   })();
 
-  const text = safeMessageText(message);
+  const rawType = String((message && message.type) || 'chat').toLowerCase();
+  const isViewOnce = rawType === 'viewonce' || rawType === 'view_once' || rawType === 'viewoncemessage' || Boolean(message?.viewOnceMessage);
+  
+  let text = safeMessageText(message);
+  if (isViewOnce) {
+    text = text ? `⏳ ${text}` : '⏳';
+  }
 
   const location = message.location || {};
   const lat = message.lat ?? location.latitude ?? location.lat;
@@ -374,7 +382,7 @@ function ActiveChatMessages({ chatId, apiKey, theme, hasMore, loadingEarlier, on
   }
 
   return (
-    <div ref={scrollBoxRef} onScroll={handleScroll} className={`flex-1 overflow-y-auto p-6 flex flex-col gap-4 ${theme === 'dark' ? 'bg-[#0a0c10]' : 'bg-slate-50'}`}>
+    <div ref={scrollBoxRef} onScroll={handleScroll} className={`flex-1 overflow-y-auto p-3 sm:p-6 flex flex-col gap-4 ${theme === 'dark' ? 'bg-[#0a0c10]' : 'bg-slate-50'}`}>
       {hasMore && (
         <button
           onClick={() => onLoadEarlier(chatId)}
@@ -486,6 +494,7 @@ export default function LiveInbox() {
   const [searching, setSearching] = useState(false);
   const [earlier, setEarlier] = useState({});
   const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [automationsOpen, setAutomationsOpen] = useState(false);
   const loadingHistoryRef = useRef(null);
   const listLoadedRef = useRef(false);
   const searchTimerRef = useRef(null);
@@ -564,7 +573,7 @@ export default function LiveInbox() {
         if (!m.id) return;
         const existing = merged.get(m.id);
         if (!existing) { merged.set(m.id, m); return; }
-        if (!existing.displayName || existing.displayName.includes('@')) existing.displayName = m.displayName || existing.displayName;
+        if (m.displayName && m.displayName !== (id.split('@')[0] || id)) existing.displayName = m.displayName;
       });
       const mapped = [...merged.values()].filter(c => c.id);
       // Seed the live avatar map with the already-decorated profile pictures
@@ -977,8 +986,8 @@ export default function LiveInbox() {
                         {chat.isStatus
                           ? <span className={`text-[9px] shrink-0 font-bold uppercase tracking-wide ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>story</span>
                           : (hasLive && <span className={`text-[9px] shrink-0 font-bold uppercase tracking-wide ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-600'}`}>live</span>)}
-                      </div>
-                    </div>
+    </div>
+  </div>
                   </button>
                 );
               })
@@ -1001,8 +1010,8 @@ export default function LiveInbox() {
         ) : (
           <>
             {/* Chat Header */}
-            <div className={`h-16 flex items-center px-6 shrink-0 border-b shadow-sm z-10 ${theme === 'dark' ? 'border-[#1e222b] bg-[#0d1015]' : 'border-slate-200 bg-white'}`}>
-              <button onClick={() => { setActiveChatId(null); setReplyTo(null); liveStream.setActiveChat(null); }} className="md:hidden p-2 -ml-3 mr-2 text-slate-500">
+            <div className={`h-16 flex items-center px-3 sm:px-6 shrink-0 border-b shadow-sm z-10 ${theme === 'dark' ? 'border-[#1e222b] bg-[#0d1015]' : 'border-slate-200 bg-white'}`}>
+              <button onClick={() => { setActiveChatId(null); setReplyTo(null); liveStream.setActiveChat(null); }} aria-label="Back to chats" className="md:hidden w-10 h-10 rounded-xl flex items-center justify-center -ml-2 mr-1 text-slate-500 active:bg-slate-200/60 dark:active:bg-[#16191f]">
                 &larr;
               </button>
               <div className={`w-9 h-9 rounded-full flex items-center justify-center mr-3 overflow-hidden shrink-0 ${isStatusChat(activeChatId) ? (theme === 'dark' ? 'bg-emerald-500/10' : 'bg-emerald-100') : (theme === 'dark' ? 'bg-[#1e222b]' : 'bg-slate-100')}`}>
@@ -1020,6 +1029,15 @@ export default function LiveInbox() {
                   {isStatusChat(activeChatId) ? 'Status updates' : 'Saved · live'}
                 </p>
               </div>
+              {!isStatusChat(activeChatId) && (
+                <button
+                  onClick={() => setAutomationsOpen(true)}
+                  title="Automations for this chat"
+                  className={`ml-auto p-2 rounded-xl transition-colors ${theme === 'dark' ? 'text-slate-500 hover:text-amber-400 hover:bg-amber-400/10' : 'text-slate-400 hover:text-amber-600 hover:bg-amber-50'}`}
+                >
+                  <Zap className="w-5 h-5" />
+                </button>
+              )}
             </div>
 
             {/* Chat Messages / Status Viewer */}
@@ -1058,6 +1076,17 @@ export default function LiveInbox() {
           </>
         )}
       </div>
+
+      {automationsOpen && activeChatId && (
+        <ChatAutomationsModal
+          apiKey={apiKey}
+          theme={theme}
+          chatId={activeChatId}
+          chatName={resolveName(activeChatId)}
+          isGroup={activeChatId.endsWith('@g.us')}
+          onClose={() => setAutomationsOpen(false)}
+        />
+      )}
 
     </div>
   );

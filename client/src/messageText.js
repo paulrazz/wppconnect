@@ -15,6 +15,22 @@ export const safeMessageText = (message) =>
     .find(value => typeof value === 'string' && value.trim() && !looksLikeBinaryPayload(value))
     ?.trim() || '';
 
+// View-once media arrives (or was stored pre-normalization) under the
+// `view_once` / `viewOnce` / `viewOnceMessage` type umbrella with the real
+// media nested inside. Resolve the effective media type so view-once images
+// and videos render exactly like normal media - no timer emoji, no
+// view-once restriction. The server unwraps fresh messages already; this
+// covers older durable rows and unnormalized payloads.
+export const viewOnceInnerType = (message) => {
+  const type = String((message && message.type) || 'chat').toLowerCase();
+  if (type === 'viewonce' || type === 'view_once' || type === 'viewoncemessage' || message?.viewOnceMessage) {
+    const inner = (message?.viewOnceMessage && typeof message.viewOnceMessage === 'object') ? (message.viewOnceMessage.message || message.viewOnceMessage) : {};
+    const mediaKey = Object.keys(inner || {}).find(k => String(k).endsWith('Message'));
+    return String(mediaKey || 'image').replace(/Message$/, '').toLowerCase();
+  }
+  return type;
+};
+
 const MEDIA_LABELS = {
   image: '📷 Photo',
   video: '🎥 Video',
@@ -34,8 +50,7 @@ const MEDIA_LABELS = {
 export const messagePreview = (message) => {
   const text = safeMessageText(message);
   if (text) return text;
-  const type = String(message?.type || '').toLowerCase();
-  const labeled = MEDIA_LABELS[type];
+  const labeled = MEDIA_LABELS[viewOnceInnerType(message)];
   if (labeled) return labeled;
   const mime = message?.mimetype || '';
   if (/^image\//.test(mime)) return MEDIA_LABELS.image;

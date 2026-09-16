@@ -35,12 +35,21 @@ function previewText(message, fallback = '') {
   if (!message) return fallback;
   const type = String(message.type || 'chat').toLowerCase();
   const text = safeText(message);
+  // View-once media: normalize to its inner media type so the sidebar preview
+  // reads like a normal photo/video (never a bare "[view once]").
+  const normalizedType =
+    type === 'viewonce' || type === 'view_once' || type === 'viewoncemessage' || message?.viewOnceMessage
+      ? String(((() => {
+          const inner = (message?.viewOnceMessage && typeof message.viewOnceMessage === 'object') ? (message.viewOnceMessage.message || message.viewOnceMessage) : {};
+          return Object.keys(inner || {}).find(key => String(key).endsWith('Message')) || 'image';
+        })())).replace(/Message$/, '').toLowerCase()
+      : type;
   const media = {
     image: '📷 Photo', video: '🎥 Video', gif: '🎞️ GIF', audio: '🎵 Audio', ptt: '🎙️ Voice note',
     sticker: '🏷️ Sticker', document: `📄 ${message.filename || message.fileName || 'Document'}`,
     location: '📍 Location', live_location: '📍 Live location', vcard: '👤 Contact card',
     contact_card: '👤 Contact card', contacts_array: '👥 Contact cards',
-  }[type];
+  }[normalizedType];
   if (media) return text ? `${media}: ${text}` : media;
   if (type.includes('call')) return `${message.isMissed || type.includes('missed') ? 'Missed' : 'WhatsApp'} ${message.isVideoCall || type.includes('video') ? 'video' : 'voice'} call`;
   if (type === 'revoked' || message.isDeleted || message.isRevoked) return text ? `🚫 ${text}` : '🚫';
@@ -354,6 +363,9 @@ class InboxStore {
       (api_key, chat_id, display_name, is_group, last_message_id, last_preview, last_body, last_type, last_ts, last_from_me, last_deleted, updated_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(api_key, chat_id) DO UPDATE SET
+        display_name = CASE
+          WHEN excluded.display_name != '' AND excluded.display_name != excluded.chat_id THEN excluded.display_name
+          ELSE inbox_chats.display_name END,
         last_message_id=excluded.last_message_id, last_preview=excluded.last_preview, last_body=excluded.last_body,
         last_type=excluded.last_type, last_ts=excluded.last_ts, last_from_me=excluded.last_from_me,
         last_deleted=excluded.last_deleted, updated_at=excluded.updated_at`,

@@ -28,6 +28,11 @@ export default function Dashboard() {
   const [sandboxText, setSandboxText] = useState('Hello from CommNexus Command Center!');
   const [sandboxResult, setSandboxResult] = useState(null);
   const [isSending, setIsSending] = useState(false);
+  const [isReconciling, setIsReconciling] = useState(() => {
+    // If we have no cached state, wait for the first REST call to avoid flashing "Connect"
+    const st = sessionStore.getState();
+    return st.status === 'DISCONNECTED' && !st.details?.ready;
+  });
 
   // One-time reconcile with the authoritative REST state + auto-restore.
   useEffect(() => {
@@ -47,11 +52,13 @@ export default function Dashboard() {
             axios.post(`${API_URL}/start-session`)
               .catch(() => { if (sessionStore.getState().status === 'STARTING') sessionStore.setStatus('DISCONNECTED'); });
           }
+          setIsReconciling(false);
         })
         .catch(() => {
           if (!cancelled && ['DISCONNECTED', 'STARTING'].includes(sessionStore.getState().status)) {
             sessionStore.setStatus('OFFLINE');
           }
+          if (!cancelled) setIsReconciling(false);
         });
     });
     return () => { cancelled = true; };
@@ -100,7 +107,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 lg:p-10 bg-slate-50 dark:bg-[#0a0c10]">
+    <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-10 bg-slate-50 dark:bg-[#0a0c10]">
       <div className="max-w-7xl mx-auto space-y-8">
         
         {/* Header */}
@@ -123,14 +130,19 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
           
           {/* Main Connection Screen */}
-          <div className="xl:col-span-2 relative bg-white dark:bg-[#12151a] border border-slate-200 dark:border-[#1e222b] rounded-2xl p-8 overflow-hidden shadow-2xl">
+          <div className="xl:col-span-2 relative bg-white dark:bg-[#12151a] border border-slate-200 dark:border-[#1e222b] rounded-2xl p-4 sm:p-8 overflow-hidden shadow-2xl">
             {/* Background ambient glow */}
             <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[80%] h-[400px] bg-indigo-500/10 blur-[100px] pointer-events-none rounded-full" />
 
             <div className="relative z-10 flex flex-col items-center justify-center min-h-[400px]">
               
               <AnimatePresence mode="wait">
-                {sessionStatus === 'CONNECTED' ? (
+                {isReconciling ? (
+                  <motion.div key="reconciling" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center justify-center py-20 text-indigo-400">
+                    <LoaderCircle className="w-12 h-12 animate-spin mb-4" />
+                    <p className="text-sm font-medium tracking-wide">Syncing status...</p>
+                  </motion.div>
+                ) : sessionStatus === 'CONNECTED' ? (
                   <motion.div key="connected" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="w-full text-center">
                     <div className="relative inline-block mb-6">
                       <div className="absolute inset-0 bg-emerald-500/20 blur-2xl rounded-full" />
