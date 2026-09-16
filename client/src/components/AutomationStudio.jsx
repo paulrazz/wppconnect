@@ -417,7 +417,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
       setDraft(null);
       setEditingId(null);
     } catch (err) {
-      setMsg({ ok: false, text: err.response?.data?.error || err.message });
+      const apiErr = err.response?.data?.error; setMsg({ ok: false, text: (apiErr && typeof apiErr === 'object' ? apiErr.message : apiErr) || err.message || 'Unknown error' });
     } finally {
       setBusy(false);
     }
@@ -428,7 +428,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
       const res = await axios.put(`${SERVER_URL}/api/v1/automation/${rule.id}`, { enabled: !rule.enabled }, { headers: { 'x-api-key': apiKey } });
       setRules(prev => prev.map(r => (r.id === rule.id ? normalizeRule(res.data?.data) : r)));
     } catch (err) {
-      setMsg({ ok: false, text: err.response?.data?.error || err.message });
+      const apiErr = err.response?.data?.error; setMsg({ ok: false, text: (apiErr && typeof apiErr === 'object' ? apiErr.message : apiErr) || err.message || 'Unknown error' });
     }
   };
 
@@ -439,7 +439,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
       setRules(prev => prev.filter(r => r.id !== rule.id));
       if (editingId === rule.id) { setDraft(null); setEditingId(null); }
     } catch (err) {
-      setMsg({ ok: false, text: err.response?.data?.error || err.message });
+      const apiErr = err.response?.data?.error; setMsg({ ok: false, text: (apiErr && typeof apiErr === 'object' ? apiErr.message : apiErr) || err.message || 'Unknown error' });
     }
   };
 
