@@ -109,11 +109,15 @@ router.get('/automation/spec', (_req, res) => ok(res, automation.spec()));
 router.get('/automation/config', (req, res) => ok(res, automation.getConfig(res.locals.apiKey)));
 router.put('/automation/config', (req, res) => ok(res, automation.setConfig(res.locals.apiKey, req.body || {})));
 router.post('/automation/config/test', async (req, res) => {
-  const { generateReply } = require('../services/llm.service');
-  const result = await generateReply(req.body || {}, 'You are a test bot. Respond with exactly the word "OK" and nothing else.', [
-    { role: 'user', text: 'Ping?' }
-  ]);
-  ok(res, { status: 'success', response: result });
+  try {
+    const { generateReply } = require('../services/llm.service');
+    const result = await generateReply(req.body || {}, 'You are a test bot. Respond with exactly the word "OK" and nothing else.', [
+      { role: 'user', text: 'Ping?' }
+    ]);
+    ok(res, { status: 'success', response: result });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 router.post('/automation', (req, res) => ok(res, automation.create(res.locals.apiKey, req.body || {}), 201));
 router.put('/automation/:id', (req, res) => {
