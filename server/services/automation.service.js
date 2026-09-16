@@ -516,7 +516,7 @@ function sessionLookup(whatsappService, apiKey, jid) {
   const clean = idOf(jid);
   if (!clean) return names;
   if (/@g\.us$/.test(clean)) names.groupName = session.groupNameCache?.get?.(clean) || '';
-  const contact = (session.contactsCache?.data || []).find(c => idOf(c.id) === clean);
+  const contact = session.contactsNameMap?.get(clean);
   if (contact) {
     names.contactName = contact.name || contact.formattedName || contact.shortName || '';
     names.senderName = contact.pushname || contact.notifyName || contact.formattedName || contact.name || '';

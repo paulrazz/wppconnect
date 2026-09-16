@@ -7,10 +7,15 @@ const webhooks = require('./webhook.service');
 const eventStore = require('./event-store.service');
 const inboxStore = require('./inbox-store.service');
 const automation = require('./automation.service');
+const contactsStore = require('./contacts-store.service');
 
 // One isolated Chromium instance per API key, capped so total RAM stays
 // bounded on Railway. Each running Chrome is roughly 200-400MB.
 const MAX_CONCURRENT_SESSIONS = Math.max(1, Number(process.env.MAX_CONCURRENT_SESSIONS || 2));
+
+// How often the background job re-snapshots the durable contact store while a
+// session is CONNECTED. Reads never wait on this — it only decides freshness.
+const CONTACTS_SYNC_INTERVAL_MS = Math.max(30_000, Number(process.env.CONTACTS_SYNC_INTERVAL_MS || 10 * 60 * 1000));
 
 function withTimeout(promise, ms) {
   return Promise.race([
@@ -176,6 +181,7 @@ class Session {
     this.chatPreviewCache = new Map();
     this.contactsCache = null;
     this.contactsNameMap = new Map();
+    this.contactsSyncing = false;
     // chatId -> group subject, warmed from the live chat list and from every
     // group message we normalize. Used to heal group display names in the
     // sidebar when the durable row holds a number or an old sender's name.
@@ -187,6 +193,7 @@ class Session {
     this.passiveMode = true;
     this.deviceInfo = { battery: null, platform: null, network: null, apiStatus: 'Active', profileName: null, profilePic: null, updatedAt: null };
     this.metricsTimer = null;
+    this.contactsSyncTimer = null;
     this.generation = 0;
     this.startPromise = null;
   }
@@ -440,11 +447,20 @@ class WhatsAppService {
       clearInterval(session.metricsTimer);
       session.metricsTimer = setInterval(() => void this.refreshDeviceInfo(session), 30000);
       if (session.metricsTimer.unref) session.metricsTimer.unref();
+      // Keep the durable contact store fresh on a cadence while connected.
+      // /contacts readers never wait on this — it fills the store in the
+      // background and swaps it in wholesale once done.
+      clearInterval(session.contactsSyncTimer);
+      session.contactsSyncTimer = setInterval(() => void this.syncContacts(apiKey), CONTACTS_SYNC_INTERVAL_MS);
+      if (session.contactsSyncTimer.unref) session.contactsSyncTimer.unref();
+      void this.syncContacts(apiKey);
       return client;
     } catch (error) {
       session.client = null;
       session.chatPreviewCache.clear();
-      session.contactsCache = null;
+      // Keep the last-known snapshot: a transient browser failure must not
+      // empty the /contacts read path (it is served from the durable store,
+      // never from the browser).
       if (generation === session.generation) this.setStatus(session, 'ERROR', error);
       console.error('Failed to start WhatsApp session:', error);
       throw error;
@@ -679,10 +695,14 @@ class WhatsAppService {
     session.generation += 1;
     clearInterval(session.metricsTimer);
     session.metricsTimer = null;
+    clearInterval(session.contactsSyncTimer);
+    session.contactsSyncTimer = null;
     const client = session.client;
     session.client = null;
     session.chatPreviewCache.clear();
-    session.contactsCache = null;
+    // Keep contactsCache + contactsNameMap: the read path serves the last
+    // known snapshot while the session is down, and the reconnect sync will
+    // overwrite it. Only a full logout wipes it.
     session.myJid = null;
     // The global /chats TTL cache is keyed by apiKey - drop this tenant's
     // entry so logged-out sessions never linger in memory.
@@ -716,10 +736,13 @@ class WhatsAppService {
     session.generation += 1;
     clearInterval(session.metricsTimer);
     session.metricsTimer = null;
+    clearInterval(session.contactsSyncTimer);
+    session.contactsSyncTimer = null;
     const client = session.client;
     session.client = null;
     session.chatPreviewCache.clear();
     session.contactsCache = null;
+    session.contactsNameMap = new Map();
     session.myJid = null;
     // The global /chats TTL cache is keyed by apiKey - drop this tenant's
     // entry so logged-out sessions never linger in memory.
@@ -881,47 +904,51 @@ class WhatsAppService {
     }, chatIds);
   }
 
+  // Split the raw WPPConnect roster into sorted saved-first, alphabetical
+  // contacts and groups. Shared by the read-path cold load and the background
+  // sync job so both paths stay identical.
+  segregateContacts(rawContacts) {
+    const contacts = (rawContacts || []).filter(c => !c.isGroup && !String(c.id?._serialized || '').endsWith('@g.us'));
+    const groups = (rawContacts || []).filter(c => c.isGroup || String(c.id?._serialized || '').endsWith('@g.us'));
+    const contactName = (c) => c.name || c.formattedName || c.pushname || c.shortName || c.profileName || (c.id?._serialized || c.id || '');
+    const sortContacts = (a, b) => {
+      const aSaved = !!a.name;
+      const bSaved = !!b.name;
+      if (aSaved && !bSaved) return -1;
+      if (!aSaved && bSaved) return 1;
+      const aName = String(contactName(a)).toLowerCase();
+      const bName = String(contactName(b)).toLowerCase();
+      return aName.localeCompare(bName);
+    };
+    contacts.sort(sortContacts);
+    groups.sort(sortContacts);
+    return { contacts, groups };
+  }
+
   // Returns the full (cached) contact roster, or a searchable/sliced page.
   //
-  // opts:
-  //   query  - optional substring filter matched against name fields + JID
-  //   limit  - page size (clamped to 1..500, default 50) when paginating
-  //   offset - zero-based row offset into the SORTED + filtered list
-  //
-  // When neither limit nor offset is supplied the original full shape
-  // { all, contacts, groups } is returned untouched (backward compatible).
-  // When paginating, the heavy `all` list is omitted from the payload and a
-  // `pagination` block (contactsTotal / groupsTotal / offset / limit /
-  // hasMore) is attached so clients can drive infinite scroll.
+  // This method NEVER touches the browser. It serves the last persisted
+  // snapshot: hot in-memory cache first, then the durable SQLite store on a
+  // cold boot, and an empty (never erroring) list if neither exists yet. A
+  // background syncContacts() job keeps both fresh while CONNECTED.
   async getContacts(apiKey, { limit, offset, query = '' } = {}) {
     const session = this.getSession(apiKey);
-    if (session.contactsCache && (Date.now() - session.contactsCache.timestamp < 300000)) {
-      // cache hit below
-    } else {
-      const rawContacts = await this.requireClient(apiKey).getAllContacts();
 
-      // Perform the heavy segregation on the backend, exactly as requested by the user
-      const contacts = rawContacts.filter(c => !c.isGroup && !String(c.id?._serialized || '').endsWith('@g.us'));
-      const groups = rawContacts.filter(c => c.isGroup || String(c.id?._serialized || '').endsWith('@g.us'));
-
-      // Backend sorting: Saved contacts first, then alphabetically
-      const contactName = (c) => c.name || c.formattedName || c.pushname || c.shortName || c.profileName || (c.id?._serialized || c.id || '');
-      const sortContacts = (a, b) => {
-        const aSaved = !!a.name;
-        const bSaved = !!b.name;
-        if (aSaved && !bSaved) return -1;
-        if (!aSaved && bSaved) return 1;
-
-        const aName = String(contactName(a)).toLowerCase();
-        const bName = String(contactName(b)).toLowerCase();
-        return aName.localeCompare(bName);
-      };
-
-      contacts.sort(sortContacts);
-      groups.sort(sortContacts);
-
-      session.contactsCache = { timestamp: Date.now(), data: { all: rawContacts, contacts, groups } };
-      this._rebuildContactsNameMap(session);
+    if (!session.contactsCache) {
+      const stored = await contactsStore.load(apiKey);
+      if (stored) {
+        session.contactsCache = {
+          timestamp: stored.syncedAt || Date.now(),
+          data: { all: [...stored.contacts, ...stored.groups], contacts: stored.contacts, groups: stored.groups },
+        };
+        this._rebuildContactsNameMap(session);
+      } else {
+        session.contactsCache = { timestamp: Date.now(), data: { all: [], contacts: [], groups: [] } };
+        // Nothing persisted yet (brand-new tenant). If the browser is already
+        // up, kick the background sync so the next read has data — this still
+        // never waits on the browser, it just self-heals in the background.
+        if (session.client && session.sessionStatus === 'CONNECTED') void this.syncContacts(apiKey);
+      }
     }
 
     const { all, contacts, groups } = session.contactsCache.data;
@@ -956,6 +983,32 @@ class WhatsAppService {
         hasMore: pageStart + pageSize < Math.max(filteredContacts.length, filteredGroups.length),
       },
     };
+  }
+
+  // Background refresh. The ONLY path that talks to the WPPConnect browser
+  // for contacts. Called on CONNECTED and on a periodic timer; it overwrites
+  // both the durable store and the hot in-memory snapshot so every /contacts
+  // read stays instant and never 503s.
+  async syncContacts(apiKey) {
+    const session = this.getSession(apiKey);
+    const client = session.client;
+    if (!client || session.sessionStatus !== 'CONNECTED' || session.contactsSyncing) return;
+    session.contactsSyncing = true;
+    try {
+      const rawContacts = await client.getAllContacts();
+      const { contacts, groups } = this.segregateContacts(rawContacts);
+      const timestamp = Date.now();
+      session.contactsCache = { timestamp, data: { all: [...contacts, ...groups], contacts, groups } };
+      this._rebuildContactsNameMap(session);
+      void contactsStore.save(apiKey, contacts, groups, timestamp).catch(error => {
+        console.warn('Contacts store save failed:', error.message);
+      });
+      console.log(`Contacts synced for ${apiKey.slice(0, 8)} (${contacts.length} contacts, ${groups.length} groups)`);
+    } catch (error) {
+      console.warn(`Contacts sync failed for ${apiKey.slice(0, 8)}:`, error.message);
+    } finally {
+      session.contactsSyncing = false;
+    }
   }
   
   _rebuildContactsNameMap(session) {
