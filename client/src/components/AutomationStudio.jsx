@@ -480,11 +480,11 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
   const [aiConfig, setAiConfig] = useState({ provider: 'gemini', model: 'gemini-1.5-flash', apiKey: '' });
   const eventMeta = spec?.events?.find(e => e.id === draft?.trigger?.event);
   
-  const isDM = lockedChatScope && lockedChatScope.endsWith('@c.us');
+  const isDM = lockedChatScope && !lockedChatScope.endsWith('@g.us') && lockedChatScope !== 'status@broadcast';
   const allowedField = (id) => {
     if (!lockedChatScope) return true;
-    if (id === 'isGroup' || id === 'chat' || id === 'chatName') return false;
-    if (isDM && (id === 'sender' || id === 'senderName')) return false;
+    if (id === 'isGroup' || id === 'chatId' || id === 'chatName' || id === 'groupName') return false;
+    if (isDM && (id === 'sender' || id === 'senderName' || id === 'contactName')) return false;
     return true;
   };
   
