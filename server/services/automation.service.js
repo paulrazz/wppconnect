@@ -151,7 +151,7 @@ const OP_META = {
   exceeds_rate_limit: { label: 'exceeds rate limit', example: '5/10 (5 messages per 10s)' },
 };
 
-const ACTION_TYPES = ['send_text', 'send_media', 'send_reaction', 'forward_to', 'remove_member'];
+const ACTION_TYPES = ['send_text', 'send_media', 'send_reaction', 'forward_to', 'remove_member', 'llm_reply'];
 
 const ACTION_META = {
   send_text: {
@@ -190,6 +190,13 @@ const ACTION_META = {
     label: 'Remove group member',
     fields: [
       { name: 'participant', label: 'Member to remove (usually {sender})', type: 'text', required: true, default: '{sender}' },
+    ],
+  },
+  llm_reply: {
+    label: 'AI Copilot Reply',
+    fields: [
+      { name: 'prompt', label: 'System Prompt / Persona', type: 'textarea', required: true, default: 'You are a helpful assistant.' },
+      { name: 'contextLimit', label: 'Context Limit (Messages)', type: 'number', min: 1, max: 50, default: 10 },
     ],
   },
 };
@@ -814,17 +821,19 @@ class AutomationService {
     if (!this.stores.has(key)) {
       const file = path.join(DATA_DIR, `${key}.json`);
       let rules = [];
+      let aiConfig = {};
       try {
         const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
         if (Array.isArray(raw.rules)) rules = raw.rules;
+        if (raw.aiConfig) aiConfig = raw.aiConfig;
       } catch (_) { /* First run for this tenant. */ }
-      if (rules.length || fs.existsSync(file)) {
-        this.stores.set(key, { file, rules });
+      if (rules.length || Object.keys(aiConfig).length || fs.existsSync(file)) {
+        this.stores.set(key, { file, rules, aiConfig });
       } else if (!create) {
         return null;
       }
     }
-    if (!this.stores.has(key)) this.stores.set(key, { file: path.join(DATA_DIR, `${key}.json`), rules: [] });
+    if (!this.stores.has(key)) this.stores.set(key, { file: path.join(DATA_DIR, `${key}.json`), rules: [], aiConfig: {} });
     return this.stores.get(key);
   }
 
@@ -832,7 +841,7 @@ class AutomationService {
     try {
       fs.mkdirSync(path.dirname(store.file), { recursive: true });
       const tmp = `${store.file}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify({ rules: store.rules }, null, 2), 'utf8');
+      fs.writeFileSync(tmp, JSON.stringify({ rules: store.rules, aiConfig: store.aiConfig || {} }, null, 2), 'utf8');
       fs.renameSync(tmp, store.file);
     } catch (e) {
       console.warn('[automation] Failed to persist rules:', e.message);
@@ -1046,6 +1055,63 @@ class AutomationService {
         }
         
         await whatsappService.removeParticipant(apiKey, ctx.chatId, participantId);
+        break;
+      }
+      case 'llm_reply': {
+        if (!ctx.chatId) throw new Error('llm_reply requires a chatId');
+        const session = whatsappService.getSession(apiKey);
+        const myJid = session?.myJid;
+        
+        // 1. Fetch config
+        const aiConfig = this.getConfig(apiKey);
+        if (!aiConfig || !aiConfig.apiKey) throw new Error('AI Copilot is not configured in settings.');
+        
+        // 2. Fetch context (last N messages)
+        const limit = Number(action.contextLimit) || 10;
+        const chatMsgs = await whatsappService.getMessages(apiKey, ctx.chatId, limit);
+        const contextMessages = chatMsgs.reverse().map(m => {
+           const isMe = (m.id.fromMe || (m.author && m.author === myJid));
+           return {
+             role: isMe ? 'assistant' : 'user',
+             authorName: isMe ? 'Bot' : (m.sender?.pushname || m.sender?.name || m.sender?.formattedName || 'User'),
+             text: m.body || m.caption || ''
+           };
+        }).filter(m => m.text);
+        
+        // If the current message isn't in context yet for some reason, ensure it's added
+        if (ctx.text && !contextMessages.find(m => m.text === ctx.text)) {
+           contextMessages.push({
+             role: 'user',
+             authorName: ctx.name || 'User',
+             text: ctx.text
+           });
+        }
+        
+        // 3. Start Typing
+        await whatsappService.startTyping(apiKey, ctx.chatId);
+        
+        try {
+          // 4. Generate
+          const prompt = interpolate(action.prompt || 'You are a helpful assistant.', ctx);
+          const replyText = await generateReply(aiConfig, prompt, contextMessages);
+          
+          // 5. Dynamic human delay: wait Math.max(10s, words / (40 words per min) * 60s)
+          // Actually user said: "randomly vary not less than 10 seconds at anypoint"
+          const words = replyText.split(' ').length;
+          let delaySeconds = Math.max(10, Math.round(words / (60 / 60))); // basic calc
+          // Adding randomness
+          delaySeconds += Math.floor(Math.random() * 5); // 0-4 seconds random
+          
+          // Wait for delay
+          await new Promise(r => setTimeout(r, delaySeconds * 1000));
+          
+          // 6. Stop Typing & Send
+          await whatsappService.stopTyping(apiKey, ctx.chatId);
+          await whatsappService.sendMessage(apiKey, ctx.chatId, replyText, { quotedMessageId: rawId });
+        } catch (error) {
+          await whatsappService.stopTyping(apiKey, ctx.chatId).catch(() => {});
+          throw error;
+        }
         break;
       }
       default:

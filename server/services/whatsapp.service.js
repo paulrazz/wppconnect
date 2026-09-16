@@ -1226,6 +1226,16 @@ class WhatsAppService {
     return client.forwardMessagesV2(dest, messageId);
   }
 
+  async startTyping(apiKey, chatId) {
+    const client = this.requireClient(apiKey);
+    return client.startTyping(chatId);
+  }
+
+  async stopTyping(apiKey, chatId) {
+    const client = this.requireClient(apiKey);
+    return client.stopTyping(chatId);
+  }
+  
   async removeParticipant(apiKey, groupId, phone) {
     const client = this.requireClient(apiKey);
     return client.removeParticipant(groupId, phone);
