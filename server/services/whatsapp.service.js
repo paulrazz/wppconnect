@@ -488,7 +488,9 @@ class WhatsAppService {
         const delay = isSticker ? 1500 : 0;
         setTimeout(() => {
           void client.downloadMedia(message).then(dataUrl => eventStore.cacheMedia(message.id, dataUrl, { mimetype: message.mimetype, filename: message.filename || message.fileName }))
-            .catch(err => { if (isSticker) console.log('[media]', session.apiKey.slice(0, 8), 'proactive sticker cache failed:', String(err?.message || err).slice(0, 120)); });
+            .catch(err => { 
+              console.log('[media]', session.apiKey.slice(0, 8), 'proactive cache failed for type', message.type, 'id', message.id, 'error:', String(err?.message || err).slice(0, 120)); 
+            });
         }, delay);
       }
       if (message.isStatus || message.isStatusV3 || message.from === 'status@broadcast') {
@@ -510,14 +512,14 @@ class WhatsAppService {
         return;
       }
       if (message.fromMe || message.isSentByMe) {
-        // Outgoing message (sent from the API or any frontend). Stream it in
-        // real time so an open Live Inbox mirrors the account. eventStore and
-        // webhooks already record `message.sent` inside the send path, so we
-        // only persist + surface it here.
         const chatId = message.chatId?._serialized || message.chatId || message.to;
         if (chatId) this.cachePreview(session, chatId, message);
         if (chatId) inboxStore.recordMessage(session.apiKey, chatId, message, this.resolveContactDisplayName(session, chatId));
         this.io?.to(`session_${session.apiKey}`).emit('new_message', message);
+        // We must append it to eventStore! If it was sent via our API, eventStore 
+        // will safely deduplicate it by ID. If it was sent physically from the phone, 
+        // this is our only chance to save it to the DB!
+        eventStore.append('message.sent', message);
         return;
       }
       this.io?.to(`session_${session.apiKey}`).emit('new_message', message);

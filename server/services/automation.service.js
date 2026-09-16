@@ -856,6 +856,18 @@ class AutomationService {
     }
   }
 
+  getConfig(apiKey) {
+    const store = this._store(apiKey, true);
+    return store.aiConfig || {};
+  }
+
+  setConfig(apiKey, aiConfig) {
+    const store = this._store(apiKey, true);
+    store.aiConfig = aiConfig;
+    this._save(store);
+    return store.aiConfig;
+  }
+
   // ---- Public CRUD ----------------------------------------------------
   list(apiKey, chatId) {
     const store = this._store(apiKey, false);
