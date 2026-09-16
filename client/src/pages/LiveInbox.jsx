@@ -829,7 +829,7 @@ export default function LiveInbox() {
   // local-state churn (typing in search, toggling a reply, sending) does not
   // rebuild + sort the whole list every render; it recomputes on the live
   // version bump and list/contact changes.
-  const sidebar = useMemo(() => {
+  const chatRows = useMemo(() => {
     const map = {};
     const names = liveStream.getChatNames();
     apiChats.forEach(c => {
@@ -841,30 +841,40 @@ export default function LiveInbox() {
       if (!map[chatId]) map[chatId] = { id: chatId, displayName: resolveName(chatId), lastMessage: null, contact: null, isStatus: false, profilePic: avatars[chatId] || null };
       if (last) map[chatId] = { ...map[chatId], lastMessage: { ...last, timestamp: last.timestamp || 0 } };
     });
-    const allStatuses = liveStream.getStatuses();
-    for (const senderId of Object.keys(allStatuses)) {
-      const list = allStatuses[senderId] || [];
-      const newest = list[list.length - 1];
-      if (!newest) continue;
-      const contact = contacts[senderId] || {};
-      const senderInfo = newest.sender || {};
-      const displayName = contact.name || contact.pushname || senderInfo.name || senderInfo.formattedName || senderInfo.pushname || newest.notifyName || senderId.split('@')[0];
-      map[statusChatId(senderId)] = {
-        id: statusChatId(senderId),
-        displayName,
-        contact: null,
-        isStatus: true,
-        profilePic: avatars[senderId] || null,
-        senderId,
-        lastMessage: { ...newest, timestamp: statusTime(newest), previewText: messagePreview({ ...newest, timestamp: statusTime(newest) }) },
-      };
-    }
     return Object.values(map).sort((a, b) => (b.lastMessage?.timestamp || 0) - (a.lastMessage?.timestamp || 0));
   }, [apiChats, liveChats, liveVersion, contacts, avatars]);
+
   const [sidebarTab, setSidebarTab] = useState('chats');
   const [chatDisplayLimit, setChatDisplayLimit] = useState(20);
-  const chatRows = useMemo(() => sidebar.filter(c => !c.isStatus), [sidebar]);
-  const statusRows = useMemo(() => sidebar.filter(c => c.isStatus), [sidebar]);
+  const [statusRows, setStatusRows] = useState([]);
+
+  // Async defer status processing to prioritize instant chat list rendering
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const allStatuses = liveStream.getStatuses();
+      const sMap = {};
+      for (const senderId of Object.keys(allStatuses)) {
+        const list = allStatuses[senderId] || [];
+        const newest = list[list.length - 1];
+        if (!newest) continue;
+        const contact = contacts[senderId] || {};
+        const senderInfo = newest.sender || {};
+        const displayName = contact.name || contact.pushname || senderInfo.name || senderInfo.formattedName || senderInfo.pushname || newest.notifyName || senderId.split('@')[0];
+        sMap[statusChatId(senderId)] = {
+          id: statusChatId(senderId),
+          displayName,
+          contact: null,
+          isStatus: true,
+          profilePic: avatars[senderId] || null,
+          senderId,
+          lastMessage: { ...newest, timestamp: statusTime(newest), previewText: messagePreview({ ...newest, timestamp: statusTime(newest) }) },
+        };
+      }
+      setStatusRows(Object.values(sMap).sort((a, b) => (b.lastMessage?.timestamp || 0) - (a.lastMessage?.timestamp || 0)));
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [liveVersion, contacts, avatars]);
+
   const activeRows = sidebarTab === 'status' ? statusRows : chatRows;
   const sidebarCount = sidebarTab === 'status' ? statusRows.length : chatRows.length;
 
