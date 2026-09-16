@@ -833,7 +833,9 @@ export default function LiveInbox() {
     const map = {};
     const names = liveStream.getChatNames();
     apiChats.forEach(c => {
-      const displayName = c.chatName || (names[c.id] || c.displayName);
+      // Forcibly heal missing or ID-only names using the freshly synced contacts list
+      const healedName = contacts[c.id]?.name || contacts[c.id]?.pushname;
+      const displayName = c.chatName || names[c.id] || healedName || c.displayName;
       map[c.id] = { ...c, displayName, isStatus: false, profilePic: c.profilePic || avatars[c.id] || null };
     });
     Object.entries(liveChats).forEach(([chatId, { messages }]) => {
