@@ -512,7 +512,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
           </h3>
           <div className="flex gap-2">
             <button onClick={() => setAiConfigOpen(true)} className={`inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${theme === 'dark' ? 'bg-purple-500/20 hover:bg-purple-500/30 text-purple-400' : 'bg-purple-100 hover:bg-purple-200 text-purple-600'}`}>
-              <Bot className="w-4 h-4 mr-1" /> AI Copilot
+              <span className="mr-1 text-sm">🤖</span> AI Copilot
             </button>
             <button onClick={startNew} className={`inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${theme === 'dark' ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}>
               <Plus className="w-4 h-4 mr-1" /> New rule
