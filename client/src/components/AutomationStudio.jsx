@@ -477,7 +477,8 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
   };
   const [pickerOpen, setPickerOpen] = useState(null);
   const [aiConfigOpen, setAiConfigOpen] = useState(false);
-  const [aiConfig, setAiConfig] = useState({ provider: 'gemini', model: 'gemini-1.5-flash', apiKey: '' });
+  const [aiConfig, setAiConfig] = useState({ provider: "gemini", model: "gemini-1.5-flash", apiKey: "" });
+  const [aiTesting, setAiTesting] = useState(false);
   const eventMeta = spec?.events?.find(e => e.id === draft?.trigger?.event);
   
   const isDM = lockedChatScope && !lockedChatScope.endsWith('@g.us') && lockedChatScope !== 'status@broadcast';
@@ -1055,12 +1056,30 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
               <button onClick={() => setAiConfigOpen(false)} className={`px-4 py-2 text-sm font-semibold rounded-lg ${theme === 'dark' ? 'hover:bg-white/5 text-slate-300' : 'hover:bg-slate-100 text-slate-600'}`}>Cancel</button>
               <button 
                 onClick={async () => {
+                  if (!aiConfig.apiKey) return alert('Enter API key first');
+                  setAiTesting(true);
+                  try {
+                    const res = await axios.post(`${SERVER_URL}/api/v1/automation/config/test`, aiConfig, { headers: { 'x-api-key': apiKey } });
+                    if (res.data.response === 'OK') alert('Connection successful!');
+                    else alert('Unexpected response: ' + res.data.response);
+                  } catch (err) {
+                    alert('Test failed: ' + (err.response?.data?.error || err.message));
+                  }
+                  setAiTesting(false);
+                }}
+                disabled={aiTesting}
+                className={`px-4 py-2 text-sm font-semibold rounded-lg border transition-colors ${theme === 'dark' ? 'border-[#363a45] text-slate-300 hover:bg-white/5' : 'border-slate-300 text-slate-600 hover:bg-slate-50'}`}
+              >
+                {aiTesting ? 'Testing...' : 'Test Connection'}
+              </button>
+              <button 
+                onClick={async () => {
                   try {
                     await axios.put(`${SERVER_URL}/api/v1/automation/config`, aiConfig, { headers: { 'x-api-key': apiKey } });
                     setAiConfigOpen(false);
                     alert('Saved!');
                   } catch (e) {
-                    alert('Failed to save config');
+                    alert('Failed to save config: ' + (e.response?.data?.error || e.message));
                   }
                 }}
                 className="px-4 py-2 text-sm font-semibold rounded-lg bg-indigo-500 text-white hover:bg-indigo-600 shadow-md"

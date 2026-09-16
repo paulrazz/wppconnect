@@ -4,12 +4,19 @@ path = 'server/routes/v1.routes.js'
 with open(path, 'r') as f:
     content = f.read()
 
-target = "router.get('/automation/spec', (_req, res) => ok(res, automation.spec()));"
+old = """router.put('/automation/config', (req, res) => ok(res, automation.setConfig(res.locals.apiKey, req.body || {})));"""
 
-replacement = """router.get('/automation/spec', (_req, res) => ok(res, automation.spec()));
-router.get('/automation/config', (req, res) => ok(res, automation.getConfig(res.locals.apiKey)));
-router.put('/automation/config', (req, res) => ok(res, automation.setConfig(res.locals.apiKey, req.body || {})));"""
+new = """router.put('/automation/config', (req, res) => ok(res, automation.setConfig(res.locals.apiKey, req.body || {})));
+router.post('/automation/config/test', async (req, res) => {
+  const { generateReply } = require('../services/llm.service');
+  const result = await generateReply(req.body || {}, 'You are a test bot. Respond with exactly the word "OK" and nothing else.', [
+    { role: 'user', text: 'Ping?' }
+  ]);
+  ok(res, { status: 'success', response: result });
+});"""
 
-content = content.replace(target, replacement)
+content = content.replace(old, new)
+
 with open(path, 'w') as f:
     f.write(content)
+
