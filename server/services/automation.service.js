@@ -4,6 +4,18 @@ const crypto = require('crypto');
 const eventStore = require('./event-store.service');
 const inboxStore = require('./inbox-store.service');
 
+// Per-account sequential queue so AI replies go out one-by-one like a human.
+const _aiQueues = new Map();
+function runInQueue(apiKey, paceSeconds, taskFn) {
+  if (!_aiQueues.has(apiKey)) _aiQueues.set(apiKey, Promise.resolve());
+  const next = _aiQueues.get(apiKey).then(async () => {
+    await taskFn();
+    if (paceSeconds > 0) await new Promise(r => setTimeout(r, paceSeconds * 1000));
+  }).catch(e => console.error('[AI Queue]', e.message));
+  _aiQueues.set(apiKey, next);
+  return next;
+}
+
 // Per-tenant automation engine. Rules are stored as JSON on the persistent
 // volume (server/data/automation/<apiKeyHash>.json), so restarts and Railway
 // deploys keep their state. The playground in the Developer docs configures
