@@ -1,4 +1,7 @@
-import React from 'react';
+import sys
+
+path = 'client/src/components/ChatAutomationsModal.jsx'
+content = """import React from 'react';
 import { X, Users, User as UserIcon } from 'lucide-react';
 import AutomationStudio from './AutomationStudio';
 
@@ -37,3 +40,8 @@ export default function ChatAutomationsModal({ apiKey, theme, chatId, chatName, 
     </div>
   );
 }
+"""
+
+with open(path, 'w') as f:
+    f.write(content)
+

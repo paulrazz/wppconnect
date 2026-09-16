@@ -315,7 +315,7 @@ function ConditionNodeEditor({
   );
 }
 
-export default function AutomationStudio({ apiKey, theme, onDraftChange, initialChatScope }) {
+export default function AutomationStudio({ apiKey, theme, onDraftChange, initialChatScope, lockedChatScope }) {
   const [rules, setRules] = useState([]);
   const [spec, setSpec] = useState(null);
   const [draft, setDraft] = useState(null);
@@ -323,6 +323,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const [loadError, setLoadError] = useState(false);
+  const displayRules = lockedChatScope ? rules.filter(r => r.trigger.chatScope === lockedChatScope) : rules;
   const [testing, setTesting] = useState({ id: null, busy: false, result: null, text: '', sender: '' });
 
   const liveVersion = useSyncExternalStore(
@@ -550,7 +551,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
           </div>
         </div>
 
-        {rules.length === 0 ? (
+        {displayRules.length === 0 ? (
           loadError ? (
             <div className="flex flex-col items-center gap-3 py-6">
               <p className={`text-sm ${theme === 'dark' ? 'text-rose-400' : 'text-rose-600'}`}>
@@ -567,7 +568,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
           )
         ) : (
           <ul className="space-y-3">
-            {rules.map(rule => (
+            {displayRules.map(rule => (
               <li key={rule.id} className={`p-4 rounded-xl border ${theme === 'dark' ? 'border-[#1e222b] bg-[#0a0c10]' : 'border-slate-200 bg-slate-50'}`}>
                 <div className="flex items-center gap-3">
                   <button
