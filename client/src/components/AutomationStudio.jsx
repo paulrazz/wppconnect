@@ -998,8 +998,8 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
                   onChange={e => {
                     const provider = e.target.value;
                     let model = aiConfig.model;
-                    if (provider === 'gemini') model = 'gemini-1.5-flash';
-                    else if (provider === 'groq') model = 'llama3-8b-8192';
+                    if (provider === 'gemini') model = 'gemini-3.6-flash';
+                    else if (provider === 'groq') model = 'llama-3.1-8b-instant';
                     else if (provider === 'openrouter') model = 'anthropic/claude-3.5-sonnet';
                     setAiConfig(prev => ({ ...prev, provider, model }));
                   }}
@@ -1011,14 +1011,32 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
                 </select>
               </div>
               <div>
-                                <label className={`block font-semibold mb-1.5 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Model</label>
-                <input 
-                  type="text"
+                                                <label className={`block font-semibold mb-1.5 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Model</label>
+                <select 
                   value={aiConfig.model} 
                   onChange={e => setAiConfig(prev => ({ ...prev, model: e.target.value }))}
-                  placeholder="e.g. gemini-1.5-flash"
                   className={inputCls(theme)}
-                />
+                >
+                  {aiConfig.provider === 'gemini' && (
+                    <>
+                      <option value="gemini-3.6-flash">gemini-3.6-flash (Fast & Free)</option>
+                      <option value="gemini-3.6-pro">gemini-3.6-pro (Advanced)</option>
+                    </>
+                  )}
+                  {aiConfig.provider === 'groq' && (
+                    <>
+                      <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (Extremely Fast)</option>
+                      <option value="llama-3.1-70b-versatile">llama-3.1-70b-versatile (Powerful)</option>
+                      <option value="mixtral-8x7b-32768">mixtral-8x7b-32768</option>
+                    </>
+                  )}
+                  {aiConfig.provider === 'openrouter' && (
+                    <>
+                      <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
+                      <option value="anthropic/claude-3.5-haiku">Claude 3.5 Haiku</option>
+                    </>
+                  )}
+                </select>
               </div>
               <div>
                 <label className={`block font-semibold mb-1.5 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>API Key</label>

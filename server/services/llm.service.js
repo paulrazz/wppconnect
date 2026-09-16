@@ -6,7 +6,7 @@ async function generateReply(config, systemPrompt, messagesContext) {
   
   if (provider === 'gemini') {
     const genAI = new GoogleGenerativeAI(config.apiKey);
-    const modelName = config.model || 'gemini-1.5-flash';
+    const modelName = config.model || 'gemini-3.6-flash';
     const model = genAI.getGenerativeModel({ model: modelName, systemInstruction: systemPrompt });
     
     // Format chat history for Gemini
@@ -39,7 +39,7 @@ async function generateReply(config, systemPrompt, messagesContext) {
       'Authorization': `Bearer ${config.apiKey}`
     },
     body: JSON.stringify({
-      model: config.model || (provider === 'groq' ? 'llama3-8b-8192' : 'openai/gpt-3.5-turbo'),
+      model: config.model || (provider === 'groq' ? 'llama-3.1-8b-instant' : 'openai/gpt-3.5-turbo'),
       messages: formattedMessages,
     })
   });
