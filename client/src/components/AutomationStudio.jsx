@@ -3,12 +3,19 @@ import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Zap, Plus, Trash2, Pencil, Check, X, PlayCircle, LoaderCircle, CornerDownRight,
-  Sparkles, Activity, ToggleLeft, ToggleRight, Layers, AlertTriangle,
+  Sparkles, Activity, ToggleLeft, ToggleRight, Layers, AlertTriangle, ContactRound,
 } from 'lucide-react';
 import liveStream from '../liveStream';
 import EmojiPicker from './EmojiPicker';
+import { MEDIA_LABELS } from '../messageText';
+import ContactPickerModal from './ContactPickerModal';
 
 const SERVER_URL = (import.meta.env.VITE_WPPCONNECT_URL || '').replace(/\/$/, '');
+
+const selectCls = (theme) =>
+  `rounded-lg border text-sm px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-500/50 ${
+    theme === 'dark' ? 'bg-[#0a0c10] border-[#262931] text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-800'
+  }`;
 
 const inputCls = (theme) =>
   `w-full rounded-lg border text-sm px-3 py-2.5 outline-none transition-all focus:ring-2 focus:ring-indigo-500/50 ${
@@ -118,7 +125,7 @@ function ConditionLabel({ condition, fieldLabel, opLabel }) {
 function ConditionNodeEditor({
   node, path, label, match, depth,
   spec, eventFields, theme,
-  fieldLabel, opLabel, isBoolField,
+  fieldLabel, opLabel, isBoolField, isEnumField, isIdentityField, isNameField, shortId, setPickerOpen, selectCls,
   updateNode, removeNode, addLeaf, addGroup, canRemoveAll,
 }) {
   if (!node?.conditions) {
@@ -147,11 +154,52 @@ function ConditionNodeEditor({
           <select
             value={node.value ? 'true' : 'false'}
             onChange={e => updateNode(path, { value: e.target.value === 'true' })}
-            className={`rounded-lg border text-sm px-2 py-2 outline-none focus:ring-2 focus:ring-indigo-500/50 ${theme === 'dark' ? 'bg-[#0a0c10] border-[#262931] text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-800'}`}
+            className={`${selectCls(theme)} flex-1`}
           >
             <option value="true">true</option>
             <option value="false">false</option>
           </select>
+        ) : isIdentityField(node.field) ? (
+          <button
+            type="button"
+            onClick={() => setPickerOpen({ path, field: node.field })}
+            className={`flex items-center gap-2 ${inputCls(theme)} flex-1 min-w-[160px] text-left`}
+            title="Pick contact / group…"
+          >
+            <ContactRound className={`w-4 h-4 shrink-0 ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-500'}`} />
+            <span className={`truncate ${node.value ? '' : (theme === 'dark' ? 'text-slate-500' : 'text-slate-400')}`}>
+              {node.value ? (isNameField(node.field) ? node.value : shortId(node.value)) : 'Pick contact / group…'}
+            </span>
+          </button>
+        ) : isEnumField(node.field) ? (
+          <select
+            value={node.value}
+            onChange={e => updateNode(path, { value: e.target.value })}
+            className={`${selectCls(theme)} flex-1 min-w-[160px]`}
+          >
+            <option value="" disabled>Select {fieldLabel(node.field)}…</option>
+            {isEnumField(node.field).map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        ) : node.field === 'reaction' ? (
+          <div className="flex-1 min-w-[160px] relative">
+            <input
+              value={node.value}
+              onChange={e => updateNode(path, { value: e.target.value })}
+              placeholder="👍"
+              className={`${inputCls(theme)} pr-10`}
+            />
+            <div className="absolute right-1 top-1 bottom-1">
+              <EmojiPicker
+                theme={theme}
+                gridCols="grid-cols-6"
+                heightClass="max-h-48"
+                selected={node.value}
+                onSelect={(emo) => updateNode(path, { value: emo })}
+              />
+            </div>
+          </div>
         ) : (
           <input
             value={node.value}
@@ -378,6 +426,25 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
 
   const actionMeta = spec?.actions?.find(a => a.type === draft?.action?.type);
   const isBoolField = (field) => spec?.operators?.[field]?.includes('is_true') || false;
+  const isIdentityField = (field) => ['sender', 'to', 'author'].includes(field);
+  const isNameField = (field) => ['contactName', 'name'].includes(field);
+  const shortId = (id = '') => String(id).split('@')[0]?.replace(/-\d+$/, '') || id;
+  const isEnumField = (field) => {
+    if (field === 'mediaType' || field === 'type') {
+      return Object.entries(MEDIA_LABELS).map(([k, v]) => ({ value: k, label: v }));
+    }
+    if (field === 'action') {
+      return ['add', 'remove', 'join', 'leave', 'promote', 'demote'].map(k => ({ value: k, label: k }));
+    }
+    if (field === 'callKind') {
+      return ['voice', 'video'].map(k => ({ value: k, label: k }));
+    }
+    if (field === 'recoveryStatus') {
+      return ['recovered', 'not-observed', 'probable-sender-match'].map(k => ({ value: k, label: k }));
+    }
+    return false;
+  };
+  const [pickerOpen, setPickerOpen] = useState(null);
   const eventMeta = spec?.events?.find(e => e.id === draft?.trigger?.event);
   const eventFields = (eventMeta?.fields || []).map(id => spec?.fields?.find(f => f.field === id)).filter(Boolean);
   const switchEvent = (event) => {
@@ -628,6 +695,12 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
                 fieldLabel={fieldLabel}
                 opLabel={opLabel}
                 isBoolField={isBoolField}
+                isEnumField={isEnumField}
+                isIdentityField={isIdentityField}
+                isNameField={isNameField}
+                shortId={shortId}
+                setPickerOpen={setPickerOpen}
+                selectCls={selectCls}
                 updateNode={updateNode}
                 removeNode={removeNode}
                 addLeaf={addLeaf}
@@ -811,6 +884,19 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
           </motion.div>
         )}
       </AnimatePresence>
+
+      {pickerOpen && (
+        <ContactPickerModal
+          apiKey={apiKey}
+          theme={theme}
+          onClose={() => setPickerOpen(null)}
+          onPick={(contact) => {
+            const v = isNameField(pickerOpen.field) ? (contact.name || contact.formattedName || contact.pushname || contact.shortName) : contact.id?._serialized || contact.id;
+            updateNode(pickerOpen.path, { value: v || '' });
+            setPickerOpen(null);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -31,7 +31,7 @@ export const viewOnceInnerType = (message) => {
   return type;
 };
 
-const MEDIA_LABELS = {
+export const MEDIA_LABELS = {
   image: '📷 Photo',
   video: '🎥 Video',
   gif: 'GIF',
