@@ -83,7 +83,7 @@ const TEXT_OPS = ['contains', 'not_contains', 'equals', 'not_equals', 'starts_wi
 const BOOL_OPS = ['is_true', 'is_false'];
 
 const OPS_BY_FIELD = {
-  sender: STRING_OPS,
+  sender: [...STRING_OPS, 'exceeds_rate_limit'],
   senderName: STRING_OPS,
   contactName: STRING_OPS,
   chatId: ['equals', 'not_equals', 'contains', 'starts_with', 'ends_with', 'in', 'not_in'],
@@ -148,9 +148,10 @@ const OP_META = {
   is_false: { label: 'is false', example: '' },
   in: { label: 'is one of', example: 'one per line: hi\nhello\nhey' },
   not_in: { label: 'is none of', example: 'one per line: spam\npromo' },
+  exceeds_rate_limit: { label: 'exceeds rate limit', example: '5/10 (5 messages per 10s)' },
 };
 
-const ACTION_TYPES = ['send_text', 'send_media', 'send_reaction', 'forward_to'];
+const ACTION_TYPES = ['send_text', 'send_media', 'send_reaction', 'forward_to', 'remove_member'];
 
 const ACTION_META = {
   send_text: {
@@ -183,6 +184,12 @@ const ACTION_META = {
     fields: [
       { name: 'to', label: 'Destination chat or number', type: 'text', required: true },
       { name: 'delay', label: 'Delay (seconds)', type: 'number', min: 0, max: 3600, default: 0 },
+    ],
+  },
+  remove_member: {
+    label: 'Remove group member',
+    fields: [
+      { name: 'participant', label: 'Member to remove (usually {sender})', type: 'text', required: true, default: '{sender}' },
     ],
   },
 };
@@ -704,8 +711,21 @@ function fieldValue(ctx, field) {
   }
 }
 
-function matchValue(op, actual, expected) {
+function matchValue(op, actual, expected, env) {
   switch (op) {
+    case 'exceeds_rate_limit': {
+      if (!env || !env.rateLimits) return false;
+      const parts = String(expected).split('/');
+      const limit = parseInt(parts[0], 10) || 5;
+      const seconds = parseInt(parts[1], 10) || 10;
+      const key = `${env.apiKey}:${env.ruleId}:${actual}`;
+      const now = Date.now();
+      let history = env.rateLimits.get(key) || [];
+      history = history.filter(t => now - t <= seconds * 1000);
+      history.push(now);
+      env.rateLimits.set(key, history);
+      return history.length >= limit;
+    }
     case 'is_true': return actual === true;
     case 'is_false': return actual === false;
     case 'equals': return String(actual || '') === normalizeValue(expected);
@@ -724,29 +744,29 @@ function matchValue(op, actual, expected) {
 
 // Evaluate one node (leaf condition OR nested group) against a context, and
 // collect the leaf-level results for the UI test panel.
-function evaluateConditionNode(node, ctx, into) {
+function evaluateConditionNode(node, ctx, into, env) {
   // Group node (nested conditions): recursively evaluate children, combine
   // with its own all/any policy.
   if (!node.field) {
-    const children = (node.conditions || []).map(child => evaluateConditionNode(child, ctx, into));
+    const children = (node.conditions || []).map(child => evaluateConditionNode(child, ctx, into, env));
     if (!children.length) return false;
     return node.match === 'any' ? children.some(Boolean) : children.every(Boolean);
   }
-  const passed = matchValue(node.op, fieldValue(ctx, node.field), node.value);
+  const passed = matchValue(node.op, fieldValue(ctx, node.field), node.value, env);
   into.push({ ...node, passed });
   return passed;
 }
 
-function evaluateRule(rule, ctx) {
+function evaluateRule(rule, ctx, env) {
   const results = [];
   const top = rule.trigger.conditions || [];
   if (top.length && top[0] && !top[0].field) {
     // New tree shape: root of the condition tree.
-    const matched = evaluateConditionNode(top[0], ctx, results);
+    const matched = evaluateConditionNode(top[0], ctx, results, env);
     return { matched, conditions: results };
   }
   const passed = (top).map(condition => {
-    const matching = matchValue(condition.op, fieldValue(ctx, condition.field), condition.value);
+    const matching = matchValue(condition.op, fieldValue(ctx, condition.field), condition.value, env);
     results.push({ ...condition, passed: matching });
     return matching;
   });
@@ -777,6 +797,7 @@ const MESSAGE_EVENTS = new Set(['message.received', 'message.quote', 'message.me
 class AutomationService {
   constructor() {
     this.stores = new Map(); // apiKeyHash -> { file, rules }
+    this.rateLimits = new Map();
     this.io = null;
   }
 
@@ -992,13 +1013,39 @@ class AutomationService {
         break;
       case 'forward_to': {
         const dest = await whatsappService.resolveDestination(apiKey, action.to);
-        const targetMediaId = event === 'message.deleted' ? ctx.messageId : rawId;
-        const media = (targetMediaId && ctx.hasMedia) ? await whatsappService.downloadMedia(apiKey, targetMediaId).catch(() => null) : null;
-        if (ctx.hasMedia && media?.dataUrl) {
-          await whatsappService.sendFile(apiKey, dest, media.dataUrl, media.filename || 'media', ctx.text);
-        } else if (ctx.text) {
-          await whatsappService.sendMessage(apiKey, dest, ctx.text);
+        const targetMessageId = event === 'message.deleted' ? ctx.messageId : rawId;
+        if (targetMessageId) {
+          await whatsappService.forwardMessage(apiKey, dest, targetMessageId);
+        } else {
+          const media = (targetMessageId && ctx.hasMedia) ? await whatsappService.downloadMedia(apiKey, targetMessageId).catch(() => null) : null;
+          if (ctx.hasMedia && media?.dataUrl) {
+            await whatsappService.sendFile(apiKey, dest, media.dataUrl, media.filename || 'media', ctx.text);
+          } else if (ctx.text) {
+            await whatsappService.sendMessage(apiKey, dest, ctx.text);
+          }
         }
+        break;
+      }
+      case 'remove_member': {
+        const participantId = interpolate(action.participant || '{sender}', ctx);
+        if (!participantId || !ctx.chatId || !ctx.isGroup) {
+          throw new Error('remove_member requires a group chat and a participant ID');
+        }
+        const session = whatsappService.getSession(apiKey);
+        const myJid = session?.myJid;
+        if (!myJid) throw new Error('Bot JID not available in session');
+        
+        // 1. We must be an admin
+        const admins = await whatsappService.getGroupAdmins(apiKey, ctx.chatId);
+        if (!admins.includes(myJid)) {
+           throw new Error('Bot is not an admin in this group');
+        }
+        // 2. The participant must NOT be an admin
+        if (admins.includes(participantId)) {
+           throw new Error('Cannot remove an admin');
+        }
+        
+        await whatsappService.removeParticipant(apiKey, ctx.chatId, participantId);
         break;
       }
       default:

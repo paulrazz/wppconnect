@@ -17,12 +17,12 @@ const contactName = (c = {}) =>
   c.name || c.formattedName || c.pushname || c.shortName || c.profileName ||
   shortId(c.id?._serialized || c.id);
 
-export default function ContactPickerModal({ apiKey, theme, onPick, onClose, title = 'Choose contact / group' }) {
+export default function ContactPickerModal({ apiKey, theme, onPick, onClose, title = 'Choose contact / group', adminOnlyGroups = false }) {
   const [tab, setTab] = useState('contacts');
   const [contacts, setContacts] = useState(null);
   const [groups, setGroups] = useState(null);
   const [query, setQuery] = useState('');
-  const [loading, setLoading] = useState(trueopera);
+  const [loading, setLoading] = useState(true);
   const dark = theme === 'dark';
 
   const load = useCallback(async () => {
@@ -51,7 +51,8 @@ export default function ContactPickerModal({ apiKey, theme, onPick, onClose, tit
     .filter(c => !q || contactName(c).toLowerCase().includes(q) || String(c.id?._serialized || c.id).toLowerCase().includes(q));
   const groupsList = (groups || [])
     .filter(g => (g.id?._serialized || g.id))
-    .filter(g => !q || String(g.name || g.subject || contactName(g)).toLowerCase().includes(q));
+    .filter(g => !q || String(g.name || g.subject || contactName(g)).toLowerCase().includes(q))
+    .filter(g => !adminOnlyGroups || g.iAmAdmin);
 
   const list = tab === 'contacts' ? contactsList : groupsList;
 

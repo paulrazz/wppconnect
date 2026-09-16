@@ -1077,7 +1077,17 @@ class WhatsAppService {
     return chats;
   }
 
-  getGroups(apiKey) { return this.requireClient(apiKey).getAllGroups(); }
+  async getGroups(apiKey) {
+    const client = this.requireClient(apiKey);
+    const session = this.getSession(apiKey);
+    const groups = await client.getAllGroups();
+    const myJid = session?.myJid || '';
+    return groups.map(g => {
+      const parts = g.participants || [];
+      const me = parts.find(p => p.id === myJid || (p.id && p.id._serialized === myJid));
+      return { ...g, iAmAdmin: me ? Boolean(me.isAdmin || me.isSuperAdmin) : false };
+    });
+  }
 
   async inspectIdentity(apiKey, id) {
     const client = this.requireClient(apiKey);
@@ -1208,6 +1218,23 @@ class WhatsAppService {
   async getDeletions(query) {
     const list = await eventStore.list({ ...query, types: ['message.deleted', 'status.deleted'], limit: Math.min(Number(query?.limit) || 100, 500) });
     return list.map(entry => ({ ...entry, deletionScope: entry.type === 'status.deleted' || entry.data?.from === 'status@broadcast' ? 'status' : entry.data?.original?.isGroupMsg || String(entry.data?.original?.chatId || '').includes('@g.us') ? 'group' : 'private-chat' }));
+  }
+
+  async forwardMessage(apiKey, to, messageId) {
+    const client = this.requireClient(apiKey);
+    const dest = await this.resolveDestination(apiKey, to);
+    return client.forwardMessagesV2(dest, messageId);
+  }
+
+  async removeParticipant(apiKey, groupId, phone) {
+    const client = this.requireClient(apiKey);
+    return client.removeParticipant(groupId, phone);
+  }
+
+  async getGroupAdmins(apiKey, groupId) {
+    const client = this.requireClient(apiKey);
+    const admins = await client.getGroupAdmins(groupId);
+    return admins.map(a => a._serialized || a.id || a);
   }
 
   async downloadMedia(apiKey, messageId) {
