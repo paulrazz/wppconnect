@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const eventStore = require('./event-store.service');
+const inboxStore = require('./inbox-store.service');
 
 // Per-tenant automation engine. Rules are stored as JSON on the persistent
 // volume (server/data/automation/<apiKeyHash>.json), so restarts and Railway
@@ -1103,7 +1104,20 @@ class AutomationService {
         
         try {
           // 4. Generate
-          const prompt = interpolate(action.prompt || 'You are a helpful assistant.', ctx);
+          let prompt = interpolate(action.prompt || 'You are a helpful assistant.', ctx);
+          
+          const personaCount = aiConfig.personaContextCount !== undefined ? Number(aiConfig.personaContextCount) : 20;
+          if (personaCount > 0) {
+            try {
+              const personaMsgs = await inboxStore.getRecentFromMe(apiKey, personaCount);
+              if (personaMsgs && personaMsgs.length > 0) {
+                prompt += `\n\nTo help you perfectly mirror the human owner's tone and communication style, here are ${personaMsgs.length} of their most recent spontaneous messages sent across various chats:\n` + personaMsgs.map(m => `"${m}"`).join('\n') + `\n\nAdopt this exact natural casing, slang, sentence length, and vocabulary.`;
+              }
+            } catch (e) {
+              console.error('[AI Persona] Failed to fetch persona context:', e);
+            }
+          }
+          
           const replyText = await generateReply(aiConfig, prompt, contextMessages);
           
           // 5. Dynamic human delay: wait Math.max(10s, words / (40 words per min) * 60s)

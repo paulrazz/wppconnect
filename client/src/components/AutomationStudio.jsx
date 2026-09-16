@@ -478,7 +478,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
   };
   const [pickerOpen, setPickerOpen] = useState(null);
   const [aiConfigOpen, setAiConfigOpen] = useState(false);
-  const [aiConfig, setAiConfig] = useState({ provider: "gemini", model: "gemini-1.5-flash", apiKey: "" });
+  const [aiConfig, setAiConfig] = useState({ provider: "gemini", model: "gemini-3.6-flash", apiKey: "", personaContextCount: 20 });
   const [aiTesting, setAiTesting] = useState({ busy: false, result: null });
   const eventMeta = spec?.events?.find(e => e.id === draft?.trigger?.event);
   
