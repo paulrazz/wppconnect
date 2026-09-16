@@ -1103,13 +1103,14 @@ class AutomationService {
             const chatMsgsResult = await inboxStore.getMessages(apiKey, ctx.chatId, { count: limit });
             const chatMsgs = Array.isArray(chatMsgsResult) ? chatMsgsResult : (chatMsgsResult?.messages || []);
             const contextMessages = [...chatMsgs].reverse().map(m => {
-               const isMe = (m.id.fromMe || (m.author && m.author === myJid));
+               if (!m) return null;
+               const isMe = (m.fromMe || m.id?.fromMe || (m.author && m.author === myJid));
                return {
                  role: isMe ? 'assistant' : 'user',
                  authorName: isMe ? 'Bot' : (m.sender?.pushname || m.sender?.name || m.sender?.formattedName || 'User'),
                  text: m.body || m.caption || ''
                };
-            }).filter(m => m.text);
+            }).filter(m => m && m.text);
             
             if (ctx.text && !contextMessages.find(m => m.text === ctx.text)) {
                contextMessages.push({
