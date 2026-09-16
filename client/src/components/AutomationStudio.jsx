@@ -397,8 +397,9 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
   const opLabel = (op) => spec?.operatorMeta?.[op]?.label || op;
 
   const save = async () => {
-    if (!draft || !draft.name.trim() || !hasAnyValue(draft.trigger?.conditions)) {
-      setMsg({ ok: false, text: 'Give the rule a name and at least one populated condition.' });
+    const allowEmptyConds = !!lockedChatScope;
+    if (!draft || !draft.name.trim() || (!hasAnyValue(draft.trigger?.conditions) && !allowEmptyConds)) {
+      setMsg({ ok: false, text: allowEmptyConds ? 'Give the rule a name.' : 'Give the rule a name and at least one populated condition.' });
       return;
     }
     setBusy(true);
