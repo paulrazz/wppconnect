@@ -14,16 +14,28 @@ const notify = () => {
   listeners.forEach(fn => { try { fn(); } catch (_) {} });
 };
 
+// Debounced so a burst of socket status/detail updates coalesces into one
+// localStorage write instead of many synchronous main-thread blocking writes.
+let persistTimer = null;
 const persist = () => {
   if (!state.apiKey) return;
-  try {
-    localStorage.setItem(KEY(state.apiKey), JSON.stringify({
-      status: state.status,
-      details: state.details,
-      qr: state.qr,
-      at: Date.now(),
-    }));
-  } catch (_) {}
+  if (persistTimer) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    try {
+      // Strip the base64 profile photo (large) from what's persisted; it is
+      // refetched via REST/socket on the next connect anyway. Prevents blowing
+      // the ~5MB localStorage quota on long-running busy sessions.
+      const info = state.details?.info ? { ...state.details.info } : {};
+      delete info.profilePic;
+      localStorage.setItem(KEY(state.apiKey), JSON.stringify({
+        status: state.status,
+        details: { ready: state.details?.ready, info },
+        qr: state.qr,
+        at: Date.now(),
+      }));
+    } catch (_) {}
+  }, 200);
 };
 
 export const sessionStore = {

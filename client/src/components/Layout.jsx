@@ -3,28 +3,16 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, Code2, LogOut, MessageSquare, Menu, X, Sun, Moon, Inbox } from 'lucide-react';
 import { removeApiKey } from '../auth';
 import liveStream from '../liveStream';
-import { motion, AnimatePresence } from 'framer-motion';
 import { useTheme } from '../ThemeContext';
 
-export default function Layout({ children }) {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const { theme, toggleTheme } = useTheme();
+const NAV_ITEMS = [
+  { path: '/inbox', icon: Inbox, label: 'Live Inbox' },
+  { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
+  { path: '/developer', icon: Code2, label: 'Developer API' },
+];
 
-  const handleLogout = async () => {
-    liveStream.disconnect();
-    await removeApiKey();
-    navigate('/login');
-  };
-
-  const navItems = [
-    { path: '/inbox', icon: Inbox, label: 'Live Inbox' },
-    { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
-    { path: '/developer', icon: Code2, label: 'Developer API' },
-  ];
-
-  const SidebarContent = () => (
+function SidebarContent({ currentPath, onLogout, onNavigate }) {
+  return (
     <>
       <div>
         <div className="h-[72px] flex items-center px-6 border-b border-slate-200 dark:border-[#1e222b]">
@@ -34,21 +22,22 @@ export default function Layout({ children }) {
           <span className="text-slate-900 dark:text-white font-extrabold text-xl tracking-tight">CommNexus</span>
         </div>
         
-        <nav className="p-4 space-y-1.5 mt-2">
+        <nav className="p-4 space-y-1.5 mt-2" aria-label="Primary">
           <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4 px-3">Platform</div>
-          {navItems.map((item) => {
-            const active = location.pathname === item.path;
+          {NAV_ITEMS.map((item) => {
+            const active = currentPath === item.path;
             return (
               <Link
                 key={item.path}
                 to={item.path}
-                onClick={() => setMobileMenuOpen(false)}
+                aria-current={active ? 'page' : undefined}
+                onClick={onNavigate}
                 className={`flex items-center px-3 py-3 rounded-xl transition-all duration-300 relative group ${
                   active ? 'text-slate-900 dark:text-white' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
                 }`}
               >
                 {active && (
-                  <motion.div layoutId="activeNavIndicator" className="absolute inset-0 bg-indigo-500/10 border border-indigo-500/20 rounded-xl hidden md:block" />
+                  <div className="absolute inset-0 bg-indigo-500/10 border border-indigo-500/20 rounded-xl hidden md:block" />
                 )}
                 {active && (
                    <div className="absolute inset-0 bg-indigo-500/10 border border-indigo-500/20 rounded-xl md:hidden" />
@@ -63,7 +52,7 @@ export default function Layout({ children }) {
 
       <div className="p-4 border-t border-slate-200 dark:border-[#1e222b]">
         <button 
-          onClick={handleLogout}
+          onClick={onLogout}
           className="flex w-full items-center px-3 py-3 rounded-xl text-slate-500 dark:text-slate-400 hover:bg-rose-50/50 dark:hover:bg-rose-500/10 hover:text-rose-500 dark:hover:text-rose-400 transition-all duration-200 font-semibold text-sm group"
         >
           <LogOut className="w-5 h-5 mr-3 text-slate-500 group-hover:text-rose-500 dark:group-hover:text-rose-400 transition-colors" />
@@ -72,6 +61,23 @@ export default function Layout({ children }) {
       </div>
     </>
   );
+}
+
+export default function Layout({ children }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { theme, toggleTheme } = useTheme();
+
+  const handleLogout = async () => {
+    try {
+      liveStream.disconnect();
+    } catch { /* socket may be uninitialized */ }
+    try {
+      await removeApiKey();
+    } catch { /* ignore localStorage failures */ }
+    navigate('/login');
+  };
 
   return (
     <div className="flex h-screen bg-slate-50 dark:bg-[#0a0c10] text-slate-700 dark:text-slate-300 font-sans selection:bg-indigo-500/30 overflow-hidden flex-col">
@@ -98,46 +104,36 @@ export default function Layout({ children }) {
         </button>
       </div>
 
-      {/* Universal Sidebar Overlay Modal */}
-      <AnimatePresence>
-        {mobileMenuOpen && (
-          <>
-            <motion.div 
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              onClick={() => setMobileMenuOpen(false)}
-              className="fixed inset-0 bg-slate-900/60 dark:bg-black/60 backdrop-blur-sm z-40"
-            />
-            <motion.aside 
-              initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} transition={{ type: 'spring', bounce: 0, duration: 0.4 }}
-              className="fixed top-0 left-0 bottom-0 w-64 max-w-[85vw] bg-white dark:bg-[#0d1015] border-r border-slate-200 dark:border-[#1e222b] flex flex-col justify-between z-50 shadow-2xl safe-area-top safe-area-bottom"
-            >
-              {/* Close Button Inside Modal */}
-              <button 
-                onClick={() => setMobileMenuOpen(false)} 
-                className="absolute top-4 right-4 p-2 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:text-white rounded-lg bg-slate-100 dark:bg-[#16191f] border border-slate-200 dark:border-[#1e222b] transition-colors z-50"
-              >
-                <X size={18} />
-              </button>
-              <SidebarContent />
-            </motion.aside>
-          </>
-        )}
-      </AnimatePresence>
+      {/* Universal Sidebar Overlay Modal (CSS-driven: kept mounted so the
+          close animation can run; translate/opacity toggle on state). */}
+      <div
+        className={`fixed inset-0 bg-slate-900/60 dark:bg-black/60 backdrop-blur-sm z-40 transition-opacity duration-300 ${mobileMenuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+        onClick={() => setMobileMenuOpen(false)}
+      />
+      <aside
+        className={`fixed top-0 left-0 bottom-0 w-64 max-w-[85vw] bg-white dark:bg-[#0d1015] border-r border-slate-200 dark:border-[#1e222b] flex flex-col justify-between z-50 shadow-2xl safe-area-top safe-area-bottom transition-transform duration-300 ease-out ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}
+        aria-hidden={!mobileMenuOpen}
+      >
+        {/* Close Button Inside Modal */}
+        <button 
+          onClick={() => setMobileMenuOpen(false)} 
+          className="absolute top-4 right-4 p-2 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:text-white rounded-lg bg-slate-100 dark:bg-[#16191f] border border-slate-200 dark:border-[#1e222b] transition-colors z-50"
+        >
+          <X size={18} />
+        </button>
+        <SidebarContent currentPath={location.pathname} onLogout={handleLogout} onNavigate={() => setMobileMenuOpen(false)} />
+      </aside>
 
-      {/* Main Content Area with Page Transitions */}
+      {/* Main Content Area with Page Transition (CSS keyframe, keyed by route
+          so navigation replays the fade/slide). Honors prefers-reduced-motion
+          via the global media rule in index.css. */}
       <main className="flex-1 flex flex-col relative bg-slate-50 dark:bg-[#0a0c10] overflow-hidden">
-        <AnimatePresence mode="wait">
-          <motion.div 
-            key={location.pathname}
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -15 }}
-            transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-            className="flex-1 flex flex-col h-full overflow-hidden"
-          >
-            {children}
-          </motion.div>
-        </AnimatePresence>
+        <div
+          key={location.pathname}
+          className="page-transition flex-1 flex flex-col h-full overflow-hidden"
+        >
+          {children}
+        </div>
       </main>
     </div>
   );

@@ -1,25 +1,34 @@
-import { useState, useEffect, memo, useSyncExternalStore } from 'react';
+import { useState, useEffect, lazy, Suspense, useSyncExternalStore } from 'react';
 import { useTheme } from '../ThemeContext';
 import axios from 'axios';
 import { getApiKey } from '../auth';
 import { sessionStore } from '../sessionStore';
 import { useNavigate } from 'react-router-dom';
-import { Code2, Copy, Lock, Check, Terminal, PlayCircle, LoaderCircle, Webhook, Activity, FileText, MessageSquare, Server, Image as ImageIcon, Users, Plus, Trash2, Globe, Zap } from 'lucide-react';
-import AutomationStudio from '../components/AutomationStudio';
-import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
-import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash';
-import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript';
-import python from 'react-syntax-highlighter/dist/esm/languages/prism/python';
-import php from 'react-syntax-highlighter/dist/esm/languages/prism/php';
-import json from 'react-syntax-highlighter/dist/esm/languages/prism/json';
-import { vscDarkPlus, vs } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { Copy, Lock, Check, Terminal, PlayCircle, LoaderCircle, Webhook, Activity, MessageSquare, Server, Image as ImageIcon, Users, Plus, Trash2, Globe, Zap, Eye, EyeOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-SyntaxHighlighter.registerLanguage('bash', bash);
-SyntaxHighlighter.registerLanguage('javascript', javascript);
-SyntaxHighlighter.registerLanguage('python', python);
-SyntaxHighlighter.registerLanguage('php', php);
-SyntaxHighlighter.registerLanguage('json', json);
+// Heavier pieces load only when first needed (see note next to each):
+// - react-syntax-highlighter (prism engine + grammars + themes) is ~60% of
+//   this page's bundle; it only kicks in when the first snippet renders.
+// - AutomationStudio drags in EmojiPicker + ContactPickerModal + liveStream
+//   and is only mounted for the automation section.
+const CodeBlock = lazy(() => import('../components/CodeBlock'));
+const AutomationStudio = lazy(() => import('../components/AutomationStudio'));
+
+// While the code chunk streams in, show the code as plain pre-formatted text
+// (no syntax colors) instead of a blank spinner — content stays visible
+// instantly and the syntax highlighting upgrades in place.
+const CodeFallback = ({ code }) => (
+  <pre className="m-0 p-5 text-[0.875rem] font-mono leading-relaxed whitespace-pre-wrap break-words text-left text-slate-300">
+    {code}
+  </pre>
+);
+
+const LazyCodeBlock = (props) => (
+  <Suspense fallback={<CodeFallback code={props.code} />}>
+    <CodeBlock {...props} />
+  </Suspense>
+);
 
 const SERVER_URL = (import.meta.env.VITE_WPPCONNECT_URL || '').replace(/\/$/, '');
 
@@ -38,21 +47,11 @@ const WEBHOOK_EVENTS = [
   { id: 'status.deleted', label: 'Status deleted' },
 ];
 
-// Memoized Code Block for heavy optimization
-const CodeBlock = memo(({ language, code, theme }) => (
-  <SyntaxHighlighter
-    language={language}
-    style={theme === 'dark' ? vscDarkPlus : vs}
-    customStyle={{ margin: 0, padding: '1.25rem', background: 'transparent', fontSize: '0.875rem' }}
-  >
-    {code}
-  </SyntaxHighlighter>
-));
-
 export default function Developer() {
   const [apiKey, setApiKey] = useState('');
   const [copied, setCopied] = useState('');
   const [activeLang, setActiveLang] = useState('curl');
+  const [revealKey, setRevealKey] = useState(false);
   const { theme } = useTheme();
   const [testResult, setTestResult] = useState(null);
   const [isTesting, setIsTesting] = useState(false);
@@ -76,11 +75,14 @@ export default function Developer() {
   void sessionVersion;
   const sessionStatus = sessionStore.getState().status;
 
+  const maskedKey = apiKey ? (apiKey.length > 8 ? `${apiKey.slice(0, 4)}${'•'.repeat(8)}${apiKey.slice(-4)}` : '•'.repeat(apiKey.length)) : '';
+  const snippetKey = revealKey ? apiKey : 'YOUR_API_KEY';
+
   useEffect(() => {
     if (activeSection !== 'webhooks' || !apiKey) return;
     axios.get(`${SERVER_URL}/api/v1/webhooks`, { headers: { 'x-api-key': apiKey } })
       .then(res => setWebhooks(Array.isArray(res.data?.data) ? res.data.data : []))
-      .catch(() => setWebhooks([]));
+      .catch(() => { setWebhooks([]); setWebhookMsg({ ok: false, text: 'Could not load webhooks from the server. Check your connection and try the section again.' }); });
   }, [activeSection, apiKey]);
 
   const toggleWebhookEvent = (eventId) => {
@@ -129,9 +131,11 @@ export default function Developer() {
   }, []);
 
   const copyToClipboard = (text, id) => {
-    navigator.clipboard.writeText(text);
-    setCopied(id);
-    setTimeout(() => setCopied(''), 2000);
+    if (!navigator.clipboard?.writeText) return; // non-HTTPS / unsupported
+    navigator.clipboard.writeText(text).catch(() => {}).finally(() => {
+      setCopied(id);
+      setTimeout(() => setCopied(''), 2000);
+    });
   };
 
   const openPlayground = (ep) => {
@@ -171,13 +175,13 @@ export default function Developer() {
     }
   };
 
-  const getSnippets = (endpoint, method, payloadStr) => {
+  const getSnippets = (endpoint, method, payloadStr, snippetKey) => {
     const fullUrl = `${SERVER_URL}/api${endpoint}`;
     return {
-      curl: `curl -X ${method} ${fullUrl} \\\n  -H "x-api-key: ${apiKey}"${payloadStr ? ` \\\n  -H "Content-Type: application/json" \\\n  -d '${payloadStr}'` : ''}`,
-      javascript: `const axios = require('axios');\n\naxios({\n  method: '${method}',\n  url: '${fullUrl}',\n  headers: { 'x-api-key': '${apiKey}' }${payloadStr ? `,\n  data: ${payloadStr}` : ''}\n})\n.then(res => console.log(res.data))\n.catch(console.error);`,
-      python: `import requests\n\nurl = "${fullUrl}"\nheaders = { "x-api-key": "${apiKey}" }\n${payloadStr ? `payload = ${payloadStr}\n` : ''}\nresponse = requests.request("${method}", url, headers=headers${payloadStr ? ', json=payload' : ''})\nprint(response.json())`,
-      php: `<?php\n$ch = curl_init("${fullUrl}");\ncurl_setopt($ch, CURLOPT_CUSTOMREQUEST, "${method}");\ncurl_setopt($ch, CURLOPT_RETURNTRANSFER, true);\n${payloadStr ? `curl_setopt($ch, CURLOPT_POSTFIELDS, '${payloadStr}');\n` : ''}curl_setopt($ch, CURLOPT_HTTPHEADER, [\n  "x-api-key: ${apiKey}"${payloadStr ? ',\n  "Content-Type: application/json"' : ''}\n]);\n\n$result = curl_exec($ch);\ncurl_close($ch);\necho $result;\n?>`
+      curl: `curl -X ${method} ${fullUrl} \\\n  -H "x-api-key: ${snippetKey}"${payloadStr ? ` \\\n  -H "Content-Type: application/json" \\\n  -d '${payloadStr}'` : ''}`,
+      javascript: `const axios = require('axios');\n\naxios({\n  method: '${method}',\n  url: '${fullUrl}',\n  headers: { 'x-api-key': '${snippetKey}' }${payloadStr ? `,\n  data: ${payloadStr}` : ''}\n})\n.then(res => console.log(res.data))\n.catch(console.error);`,
+      python: `import requests\n\nurl = "${fullUrl}"\nheaders = { "x-api-key": "${snippetKey}" }\n${payloadStr ? `payload = ${payloadStr}\n` : ''}\nresponse = requests.request("${method}", url, headers=headers${payloadStr ? ', json=payload' : ''})\nprint(response.json())`,
+      php: `<?php\n$ch = curl_init("${fullUrl}");\ncurl_setopt($ch, CURLOPT_CUSTOMREQUEST, "${method}");\ncurl_setopt($ch, CURLOPT_RETURNTRANSFER, true);\n${payloadStr ? `curl_setopt($ch, CURLOPT_POSTFIELDS, '${payloadStr}');\n` : ''}curl_setopt($ch, CURLOPT_HTTPHEADER, [\n  "x-api-key: ${snippetKey}"${payloadStr ? ',\n  "Content-Type: application/json"' : ''}\n]);\n\n$result = curl_exec($ch);\ncurl_close($ch);\necho $result;\n?>`
     };
   };
 
@@ -302,8 +306,16 @@ export default function Developer() {
                       <h3 className={`text-sm font-bold uppercase tracking-wider mb-4 ${theme === 'dark' ? 'text-slate-300' : 'text-slate-800'}`}>Your Secret Key</h3>
                       <div className="flex items-center w-full">
                         <code className={`flex-1 font-mono text-xs sm:text-sm px-3 sm:px-4 py-3 rounded-l-lg border overflow-x-auto whitespace-nowrap ${theme === 'dark' ? 'bg-[#0a0c10] border-[#262931] text-emerald-400' : 'bg-slate-50 border-slate-300 text-emerald-600'}`}>
-                          {apiKey || 'Loading...'}
+                          {apiKey ? (revealKey ? apiKey : maskedKey) : 'Loading...'}
                         </code>
+                        <button
+                          onClick={() => setRevealKey(v => !v)}
+                          className={`px-3 py-3 border-y transition-colors shrink-0 ${theme === 'dark' ? 'bg-[#12151a] border-[#262931] text-slate-400 hover:text-slate-200 hover:bg-[#1e222b]' : 'bg-white border-slate-300 text-slate-500 hover:text-slate-800 hover:bg-slate-100'}`}
+                          title={revealKey ? 'Hide API key' : 'Reveal API key'}
+                          aria-label={revealKey ? 'Hide API key' : 'Reveal API key'}
+                        >
+                          {revealKey ? <EyeOff size={20} /> : <Eye size={20} />}
+                        </button>
                         <button onClick={() => copyToClipboard(apiKey, 'apikey')} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-3 rounded-r-lg transition-colors border border-indigo-600 shrink-0">
                           {copied === 'apikey' ? <Check size={20} /> : <Copy size={20} />}
                         </button>
@@ -422,7 +434,15 @@ export default function Developer() {
                 )}
 
                 {activeSection === 'automation' && (
-                  <AutomationStudio apiKey={apiKey} theme={theme} onDraftChange={setAutomationDraft} />
+                  <Suspense fallback={
+                    <div className={`p-6 rounded-xl border ${theme === 'dark' ? 'bg-[#12151a] border-[#1e222b]' : 'bg-white border-slate-200 shadow-sm'}`}>
+                      <div className="flex items-center gap-2 text-sm text-slate-500">
+                        <LoaderCircle className="w-4 h-4 animate-spin" /> Loading automation studio…
+                      </div>
+                    </div>
+                  }>
+                    <AutomationStudio apiKey={apiKey} theme={theme} onDraftChange={setAutomationDraft} />
+                  </Suspense>
                 )}
 
                 {endpoints.map(ep => activeSection === ep.id && (
@@ -487,7 +507,7 @@ export default function Developer() {
                           {testResult.success ? '200 OK Response' : 'Error Response'}
                         </h3>
                         <div className={`rounded-xl overflow-hidden border ${testResult.success ? (theme==='dark'?'border-emerald-500/30':'border-emerald-400') : (theme==='dark'?'border-rose-500/30':'border-rose-400')}`}>
-                          <CodeBlock language="json" code={JSON.stringify(testResult.data, null, 2)} theme={theme} />
+                          <LazyCodeBlock language="json" code={JSON.stringify(testResult.data, null, 2)} theme={theme} />
                         </div>
                       </motion.div>
                     )}
@@ -518,15 +538,15 @@ export default function Developer() {
           <div className="flex-1 relative overflow-y-auto">
             {activeSection === 'auth' ? (
               <div className="p-6">
-                <CodeBlock language="bash" theme="dark" code={`# All requests must include the x-api-key header\ncurl -X GET /api/status \\\n  -H "x-api-key: YOUR_API_KEY"`} />
+                <LazyCodeBlock language="bash" theme="dark" code={`# All requests must include the x-api-key header\ncurl -X GET /api/status \\\n  -H "x-api-key: YOUR_API_KEY"`} />
               </div>
             ) : activeSection === 'webhooks' ? (
               <div className="p-6">
-                <CodeBlock language="json" theme="dark" code={`// Delivered as POST to your URL (envelope + event payload)\n{\n  "id": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",\n  "event": "message.received",\n  "createdAt": "2026-09-14T10:30:00.000Z",\n  "data": {\n    "from": "2349034040635@c.us",\n    "body": "Hello, I need support!",\n    "timestamp": 1694678123,\n    "fromMe": false\n  }\n}\n\n// Signed deliveries add the header:\n// X-WPP-Signature: sha256=<HMAC-SHA256(secret, body)>\n\n// Create it with:\n// POST /api/v1/webhooks\n// {\n//   "url": "https://your-app.example.com/webhook/wppconnect",\n//   "events": ["message.received", "message.sent", "message.ack"],\n//   "secret": "optional-shared-secret"\n// }`} />
+                <LazyCodeBlock language="json" theme="dark" code={`// Delivered as POST to your URL (envelope + event payload)\n{\n  "id": "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",\n  "event": "message.received",\n  "createdAt": "2026-09-14T10:30:00.000Z",\n  "data": {\n    "from": "2349034040635@c.us",\n    "body": "Hello, I need support!",\n    "timestamp": 1694678123,\n    "fromMe": false\n  }\n}\n\n// Signed deliveries add the header:\n// X-WPP-Signature: sha256=<HMAC-SHA256(secret, body)>\n\n// Create it with:\n// POST /api/v1/webhooks\n// {\n//   "url": "https://your-app.example.com/webhook/wppconnect",\n//   "events": ["message.received", "message.sent", "message.ack"],\n//   "secret": "optional-shared-secret"\n// }`} />
               </div>
             ) : activeSection === 'automation' ? (
               <div className="p-6">
-                <CodeBlock language="json" theme="dark" code={automationDraft ? JSON.stringify(automationDraft, null, 2) : `// Rule JSON appears here as you build it.
+                <LazyCodeBlock language="json" theme="dark" code={automationDraft ? JSON.stringify(automationDraft, null, 2) : `// Rule JSON appears here as you build it.
 // Rules react to incoming messages only.
 {
   "name": "Auto-reply to price inquiries",
@@ -556,15 +576,29 @@ export default function Developer() {
             ) : (
               endpoints.map(ep => activeSection === ep.id && (
                 <div key={ep.id} className="relative group">
+                  <div className="sticky top-0 z-20 flex items-center justify-between gap-2 px-4 py-2 bg-[#1e1e1e]/95 backdrop-blur border-b border-[#2d2d2d]">
+                    <span className="text-[11px] font-semibold text-slate-500">
+                      {snippetKey === 'YOUR_API_KEY'
+                        ? 'Samples use a placeholder key — insert yours below.'
+                        : 'Your real API key is embedded in these samples.'}
+                    </span>
+                    <button
+                      onClick={() => setRevealKey(v => !v)}
+                      className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-colors flex items-center gap-1.5 ${snippetKey === 'YOUR_API_KEY' ? 'bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30' : 'bg-amber-500/20 text-amber-300 hover:bg-amber-500/30'}`}
+                    >
+                      {snippetKey === 'YOUR_API_KEY' ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                      {snippetKey === 'YOUR_API_KEY' ? 'Insert my key' : 'Remove my key'}
+                    </button>
+                  </div>
                   <div className="absolute top-4 right-4 z-10">
-                    <button onClick={() => copyToClipboard(getSnippets(ep.path, ep.method, ep.payload ? JSON.stringify(ep.payload, null, 2) : null)[activeLang], 'code')} className="p-2 rounded bg-[#2d2d2d] text-slate-400 hover:text-white transition-colors">
+                    <button onClick={() => copyToClipboard(getSnippets(ep.path, ep.method, ep.payload ? JSON.stringify(ep.payload, null, 2) : null, snippetKey)[activeLang], 'code')} className="p-2 rounded bg-[#2d2d2d] text-slate-400 hover:text-white transition-colors">
                       {copied === 'code' ? <Check size={16} className="text-emerald-400" /> : <Copy size={16} />}
                     </button>
                   </div>
-                  <CodeBlock 
+                  <LazyCodeBlock 
                     language={activeLang === 'curl' ? 'bash' : activeLang} 
                     theme="dark" // Right pane code is always dark for that IDE feel
-                    code={getSnippets(ep.path, ep.method, ep.payload ? JSON.stringify(ep.payload, null, 2) : null)[activeLang]} 
+                    code={getSnippets(ep.path, ep.method, ep.payload ? JSON.stringify(ep.payload, null, 2) : null, snippetKey)[activeLang]} 
                   />
                 </div>
               ))
@@ -585,11 +619,11 @@ export default function Developer() {
               className="bg-white dark:bg-[#12151a] border-slate-200 dark:border-[#1e222b] rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col"
             >
               <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-[#1e222b] bg-slate-100 dark:bg-[#16191f]">
-                <h2 className="text-lg font-bold text-white flex items-center">
+                <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center">
                   <PlayCircle className="w-5 h-5 mr-2 text-indigo-400" />
                   Test {playgroundModal.endpoint.title}
                 </h2>
-                <button onClick={() => setPlaygroundModal({ isOpen: false, endpoint: null })} className="text-slate-400 hover:text-white">
+                <button onClick={() => setPlaygroundModal({ isOpen: false, endpoint: null })} className="text-slate-400 hover:text-slate-600 dark:hover:text-white">
                   ✕
                 </button>
               </div>

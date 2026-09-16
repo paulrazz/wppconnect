@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import {
-  Search, X, Users, UserCircle, LoaderCircle, MessageSquare, ContactRound,
+  Search, X, Users, UserCircle, LoaderCircle, ContactRound,
 } from 'lucide-react';
 
 const SERVER_URL = (import.meta.env.VITE_WPPCONNECT_URL || '').replace(/\/$/, '');
@@ -18,52 +18,120 @@ const contactName = (c = {}) =>
   shortId(c.id?._serialized || c.id);
 
 
-// Global in-memory cache to ensure instant loading (0.01s) across re-mounts
-let __fastContactsCache = null;
-let __fastGroupsCache = null;
+// Global in-memory cache keyed by tenant (apiKey) so switching accounts never
+// leaks one customer's contacts into another's picker. Holds the accumulated
+// browsed pages so re-opening the picker is instant.
+const __contactCache = new Map();
+
+const PAGE_SIZE = 200;
 
 export default function ContactPickerModal({ apiKey, theme, onPick, onClose, title = 'Choose contact / group', adminOnlyGroups = false }) {
   const [tab, setTab] = useState('contacts');
   const [contacts, setContacts] = useState(null);
   const [groups, setGroups] = useState(null);
   const [query, setQuery] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState({ contacts: 0, groups: 0 });
   const dark = theme === 'dark';
 
-  const load = useCallback(async () => {
+  // Fetch one page from the (server-side sorted + searchable) contact list.
+  // - append: merge the page into the existing rows + per-tenant cache.
+  // - q: server-side substring search over the FULL roster (not just the
+  //   page already loaded), so searching finds any contact immediately.
+  const fetchPage = useCallback(async ({ offset = 0, q = '', append = false } = {}) => {
     if (!apiKey) return;
-    
-    // Instant cache hit
-    if (__fastContactsCache) {
-      setContacts(__fastContactsCache);
-      setGroups(__fastGroupsCache || []);
-      setLoading(false);
-      return;
-    }
-    
-    setLoading(true);
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
+    if (q) params.set('q', q);
     try {
-      const res = await axios.get(`${API}/contacts`, { headers: { 'x-api-key': apiKey } });
+      const res = await axios.get(`${API}/contacts?${params.toString()}`, { headers: { 'x-api-key': apiKey } });
       const payload = res.data?.data || {};
-      
-      // The backend now intelligently separates them natively so the UI doesn't have to work
-      const actualContacts = Array.isArray(payload.contacts) ? payload.contacts : [];
-      const actualGroups = Array.isArray(payload.groups) ? payload.groups : [];
-      
-      __fastContactsCache = actualContacts;
-      __fastGroupsCache = actualGroups;
-      
-      setContacts(actualContacts);
-      setGroups(actualGroups);
+      const page = {
+        contacts: Array.isArray(payload.contacts) ? payload.contacts : [],
+        groups: Array.isArray(payload.groups) ? payload.groups : [],
+        hasMore: Boolean(payload.pagination?.hasMore),
+        contactsTotal: Number(payload.pagination?.contactsTotal) || 0,
+        groupsTotal: Number(payload.pagination?.groupsTotal) || 0,
+      };
+      setContacts(prev => append ? [...(prev || []), ...page.contacts] : page.contacts);
+      setGroups(prev => append ? [...(prev || []), ...page.groups] : page.groups);
+      setHasMore(page.hasMore);
+      setTotal({ contacts: page.contactsTotal, groups: page.groupsTotal });
+      if (!q) {
+        const prev = __contactCache.get(apiKey);
+        __contactCache.set(apiKey, {
+          contacts: append ? [...(prev?.contacts || []), ...page.contacts] : page.contacts,
+          groups: append ? [...(prev?.groups || []), ...page.groups] : page.groups,
+          hasMore: page.hasMore,
+          contactsTotal: page.contactsTotal,
+          groupsTotal: page.groupsTotal,
+        });
+      }
+      setLoadError(false);
     } catch (_) {
-      setContacts([]);
-      setGroups([]);
-    } finally {
-      setLoading(false);
+      setLoadError(true);
+      if (!append) { setContacts([]); setGroups([]); setHasMore(false); setTotal({ contacts: 0, groups: 0 }); }
     }
   }, [apiKey]);
 
-  useEffect(() => { load(); }, [load]);
+  // Initial open: instant from cache, otherwise the first page.
+  useEffect(() => {
+    if (!apiKey) return;
+    const cached = __contactCache.get(apiKey);
+    if (cached) {
+      setContacts(cached.contacts);
+      setGroups(cached.groups);
+      setHasMore(cached.hasMore);
+      setTotal({ contacts: cached.contactsTotal, groups: cached.groupsTotal });
+      setInitialLoading(false);
+      return;
+    }
+    setInitialLoading(true);
+    setLoadError(false);
+    fetchPage({ offset: 0 }).then(() => setInitialLoading(false));
+  }, [apiKey, fetchPage]);
+
+  // Debounced server-side search; clearing the query restores the browse cache.
+  useEffect(() => {
+    if (!apiKey) return;
+    const q = query.trim();
+    let cancelled = false;
+    if (!q) {
+      setSearching(false);
+      const cached = __contactCache.get(apiKey);
+      if (cached) {
+        setContacts(cached.contacts);
+        setGroups(cached.groups);
+        setHasMore(cached.hasMore);
+        setTotal({ contacts: cached.contactsTotal, groups: cached.groupsTotal });
+      }
+      return () => { cancelled = true; };
+    }
+    setSearching(true);
+    const timer = setTimeout(async () => {
+      await fetchPage({ offset: 0, q });
+      if (!cancelled) setSearching(false);
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [query, apiKey, fetchPage]);
+
+  // Close on Escape for keyboard accessibility.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const loadMore = useCallback(async () => {
+    if (!apiKey || loadingMore || !hasMore) return;
+    const q = query.trim();
+    setLoadingMore(true);
+    await fetchPage({ offset: Array.isArray(contacts) ? contacts.length : 0, q, append: true });
+    setLoadingMore(false);
+  }, [apiKey, query, hasMore, loadingMore, contacts, fetchPage]);
 
   const q = query.trim().toLowerCase();
   const contactsList = (Array.isArray(contacts) ? contacts : [])
@@ -75,6 +143,7 @@ export default function ContactPickerModal({ apiKey, theme, onPick, onClose, tit
     .filter(g => !adminOnlyGroups || true /* disabled admin check since groups from contacts don't have parts */);
 
   const list = tab === 'contacts' ? contactsList : groupsList;
+  const listTotal = tab === 'contacts' ? total.contacts : total.groups;
 
   const pick = (entry, isGroup) => {
     const id = entry.id?._serialized || entry.id;
@@ -110,7 +179,14 @@ export default function ContactPickerModal({ apiKey, theme, onPick, onClose, tit
   );
 
   return (
-    <div className="fixed inset-0 z-[95] flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-[95] flex items-end sm:items-center justify-center p-0 sm:p-4"
+      onClick={onClose}
+      onKeyDown={(e) => e.key === 'Escape' && onClose?.()}
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
       <div className={`absolute inset-0 ${dark ? 'bg-black/70' : 'bg-slate-900/60'} backdrop-blur-sm`} />
       <div
         onClick={e => e.stopPropagation()}
@@ -124,7 +200,7 @@ export default function ContactPickerModal({ apiKey, theme, onPick, onClose, tit
           </button>
         </div>
 
-        {loading ? (
+        {initialLoading ? (
           <div className={`flex items-center justify-center gap-2 py-16 ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
             <LoaderCircle className="w-5 h-5 animate-spin" />
             <span className="text-sm">Loading contacts…</span>
@@ -173,10 +249,42 @@ export default function ContactPickerModal({ apiKey, theme, onPick, onClose, tit
             <div className={`flex-1 overflow-y-auto px-3 pb-4 ${dark ? '' : ''}`}>
               {list.length === 0 ? (
                 <div className={`text-center text-sm py-10 ${dark ? 'text-slate-500' : 'text-slate-400'}`}>
-                  {!loading && query ? 'No matches' : tab === 'contacts' ? 'No contacts yet' : 'No groups yet'}
+                  {searching ? (
+                    <div className="flex items-center justify-center gap-2">
+                      <LoaderCircle className="w-4 h-4 animate-spin" /> Searching…
+                    </div>
+                  ) : loadError && !query ? (
+                    <div className="flex flex-col items-center gap-3">
+                      <span>Couldn't load contacts — check your connection and try again.</span>
+                      <button
+                        onClick={() => { setInitialLoading(true); fetchPage({ offset: 0 }).then(() => setInitialLoading(false)); }}
+                        className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : query && !searching ? 'No matches' : tab === 'contacts' ? 'No contacts yet' : 'No groups yet'}
                 </div>
               ) : (
-                list.map(e => row(e, tab === 'groups'))
+                <>
+                  {list.map(e => row(e, tab === 'groups'))}
+                  {hasMore && (
+                    <div className="pt-2">
+                      <button
+                        onClick={loadMore}
+                        disabled={loadingMore}
+                        className={`w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors border disabled:opacity-60 ${
+                          dark
+                            ? 'border-[#262931] text-indigo-300 hover:bg-[#161a22]'
+                            : 'border-slate-200 text-indigo-600 hover:bg-slate-100'
+                        }`}
+                      >
+                        {loadingMore ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Users className="w-4 h-4" />}
+                        Load more {listTotal > 0 ? `(${list.length} of ${listTotal})` : ''}
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </>

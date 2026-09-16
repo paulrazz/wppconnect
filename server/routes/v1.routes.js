@@ -41,7 +41,7 @@ router.get('/chats/:chatId/messages', async (req, res) => {
   res.setHeader('x-message-read-receipts', 'disabled');
   ok(res, await whatsapp.getMessages(res.locals.apiKey, req.params.chatId, req.query.limit));
 });
-router.get('/contacts', async (req, res) => ok(res, await whatsapp.getContacts(res.locals.apiKey)));
+router.get('/contacts', async (req, res) => ok(res, await whatsapp.getContacts(res.locals.apiKey, req.query)));
 router.get('/contacts/:contactId/identity', async (req, res) => ok(res, await whatsapp.inspectIdentity(res.locals.apiKey, req.params.contactId)));
 router.get('/groups', async (req, res) => ok(res, await whatsapp.getGroups(res.locals.apiKey)));
 router.get('/statuses', async (req, res) => {

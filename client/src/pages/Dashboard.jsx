@@ -8,6 +8,19 @@ import { motion, AnimatePresence } from 'framer-motion';
 const SERVER_URL = (import.meta.env.VITE_WPPCONNECT_URL || '').replace(/\/$/, '');
 const API_URL = `${SERVER_URL}/api`;
 
+// Defined OUTSIDE the component: a component type created inside the render
+// body is remounted on every render, which resets its subtree and defeats
+// React reconciliation. Extracted + pure so it only re-renders when the
+// status actually changes.
+function StatusIndicator({ status }) {
+  switch (status) {
+    case 'CONNECTED': return <div className="flex items-center text-emerald-400 bg-emerald-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><CheckCircle2 className="w-4 h-4 mr-2" /> ONLINE</div>;
+    case 'QR_READY': return <div className="flex items-center text-amber-400 bg-amber-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><Activity className="w-4 h-4 mr-2 animate-pulse" /> WAITING FOR QR</div>;
+    case 'STARTING': return <div className="flex items-center text-indigo-400 bg-indigo-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><LoaderCircle className="w-4 h-4 mr-2 animate-spin" /> CONNECTING</div>;
+    default: return <div className="flex items-center text-rose-400 bg-rose-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><XCircle className="w-4 h-4 mr-2" /> OFFLINE</div>;
+  }
+}
+
 export default function Dashboard() {
   // Session state lives in the shared store, fed by the always-on socket and
   // cached in localStorage - so a reload renders the last known state
@@ -35,34 +48,43 @@ export default function Dashboard() {
   });
 
   // One-time reconcile with the authoritative REST state + auto-restore.
+  // Extracted so the OFFLINE state can offer a real Retry button that re-runs
+  // the exact same recovery instead of leaving the user at a dead end.
+  const reconcile = async () => {
+    const key = await getApiKey();
+    if (!key) return;
+    try {
+      const { data } = await axios.get(`${API_URL}/status`);
+      sessionStore.setStatus(data.status);
+      sessionStore.setDetails(data);
+      // Auto-restore: if a saved pairing exists, relaunching the browser
+      // will reconnect without asking for a new QR scan.
+      if (!autoStarted.current && data.status === 'DISCONNECTED') {
+        autoStarted.current = true;
+        sessionStore.setStatus('STARTING');
+        axios.post(`${API_URL}/start-session`)
+          .catch(() => { if (sessionStore.getState().status === 'STARTING') sessionStore.setStatus('DISCONNECTED'); });
+      }
+      setIsReconciling(false);
+    } catch (err) {
+      if (['DISCONNECTED', 'STARTING'].includes(sessionStore.getState().status)) {
+        sessionStore.setStatus('OFFLINE');
+      }
+      setIsReconciling(false);
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
-    getApiKey().then(key => {
-      if (cancelled || !key) return;
-      axios.get(`${API_URL}/status`)
-        .then(({ data }) => {
-          if (cancelled) return;
-          sessionStore.setStatus(data.status);
-          sessionStore.setDetails(data);
-          // Auto-restore: if a saved pairing exists, relaunching the browser
-          // will reconnect without asking for a new QR scan.
-          if (!autoStarted.current && data.status === 'DISCONNECTED') {
-            autoStarted.current = true;
-            sessionStore.setStatus('STARTING');
-            axios.post(`${API_URL}/start-session`)
-              .catch(() => { if (sessionStore.getState().status === 'STARTING') sessionStore.setStatus('DISCONNECTED'); });
-          }
-          setIsReconciling(false);
-        })
-        .catch(() => {
-          if (!cancelled && ['DISCONNECTED', 'STARTING'].includes(sessionStore.getState().status)) {
-            sessionStore.setStatus('OFFLINE');
-          }
-          if (!cancelled) setIsReconciling(false);
-        });
-    });
+    reconcile().catch(() => { if (!cancelled) setIsReconciling(false); });
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const retryReconcile = () => {
+    setIsReconciling(true);
+    reconcile();
+  };
 
   const handleStartSession = async () => {
     try {
@@ -97,15 +119,6 @@ export default function Dashboard() {
     }
   };
 
-  const StatusIndicator = () => {
-    switch(sessionStatus) {
-      case 'CONNECTED': return <div className="flex items-center text-emerald-400 bg-emerald-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><CheckCircle2 className="w-4 h-4 mr-2" /> ONLINE</div>;
-      case 'QR_READY': return <div className="flex items-center text-amber-400 bg-amber-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><Activity className="w-4 h-4 mr-2 animate-pulse" /> WAITING FOR QR</div>;
-      case 'STARTING': return <div className="flex items-center text-indigo-400 bg-indigo-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><LoaderCircle className="w-4 h-4 mr-2 animate-spin" /> CONNECTING</div>;
-      default: return <div className="flex items-center text-rose-400 bg-rose-400/10 px-4 py-1.5 rounded-full font-bold text-sm"><XCircle className="w-4 h-4 mr-2" /> OFFLINE</div>;
-    }
-  };
-
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-10 bg-slate-50 dark:bg-[#0a0c10]">
       <div className="max-w-7xl mx-auto space-y-8">
@@ -120,10 +133,12 @@ export default function Dashboard() {
             <p className="text-slate-500 dark:text-slate-400 text-sm font-medium">Manage your WhatsApp connection and device health.</p>
           </div>
           <div className="mt-4 md:mt-0 flex flex-col items-end">
-            <StatusIndicator />
-            <div className="text-xs text-slate-500 mt-2 font-mono flex items-center">
-              <ShieldCheck className="w-3 h-3 mr-1" /> SECURE CONNECTION
-            </div>
+            <StatusIndicator status={sessionStatus} />
+            {sessionStatus === 'CONNECTED' && (
+              <div className="text-xs text-slate-500 mt-2 font-mono flex items-center">
+                <ShieldCheck className="w-3 h-3 mr-1" /> SECURE CONNECTION
+              </div>
+            )}
           </div>
         </div>
 
@@ -180,7 +195,13 @@ export default function Dashboard() {
                       </div>
                     </div>
 
-                    <button onClick={handleStopSession} className="px-8 py-3 rounded-lg font-bold text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition-all flex items-center justify-center mx-auto">
+                    <button
+                      onClick={async () => {
+                        if (!window.confirm('Disconnect this WhatsApp device? You will need to scan the QR code again to reconnect.')) return;
+                        await handleStopSession();
+                      }}
+                      className="px-8 py-3 rounded-lg font-bold text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition-all flex items-center justify-center mx-auto"
+                    >
                       <StopCircle className="w-5 h-5 mr-2" /> DISCONNECT
                     </button>
                   </motion.div>
@@ -218,10 +239,14 @@ export default function Dashboard() {
                     <p className="text-slate-500 dark:text-slate-400 max-w-sm mx-auto mb-8 text-sm">
                       Your WhatsApp session is currently offline. Click below to start the connection process.
                     </p>
-                    <button onClick={handleStartSession} disabled={sessionStatus === 'STARTING' || sessionStatus === 'OFFLINE'} className="px-8 py-4 rounded-xl font-extrabold text-white bg-indigo-600 hover:bg-indigo-500 border border-indigo-500 shadow-lg shadow-indigo-500/20 transition-all flex items-center justify-center mx-auto disabled:opacity-50">
-                      {sessionStatus === 'STARTING' || sessionStatus === 'OFFLINE' ? <LoaderCircle className="w-5 h-5 mr-3 animate-spin" /> : <PlayCircle className="w-5 h-5 mr-3" />}
-                      {sessionStatus === 'OFFLINE' ? 'RETRYING...' : sessionStatus === 'STARTING' ? 'CONNECTING...' : 'CONNECT DEVICE'}
-                    </button>
+                    <button
+                        onClick={sessionStatus === 'OFFLINE' ? retryReconcile : handleStartSession}
+                        disabled={isReconciling || sessionStatus === 'STARTING'}
+                        className="px-8 py-4 rounded-xl font-extrabold text-white bg-indigo-600 hover:bg-indigo-500 border border-indigo-500 shadow-lg shadow-indigo-500/20 transition-all flex items-center justify-center mx-auto disabled:opacity-50"
+                      >
+                        {(isReconciling || sessionStatus === 'STARTING') ? <LoaderCircle className="w-5 h-5 mr-3 animate-spin" /> : <PlayCircle className="w-5 h-5 mr-3" />}
+                        {isReconciling ? 'CHECKING...' : sessionStatus === 'OFFLINE' ? 'RETRY CONNECTION' : sessionStatus === 'STARTING' ? 'CONNECTING...' : 'CONNECT DEVICE'}
+                      </button>
                   </motion.div>
                 )}
               </AnimatePresence>

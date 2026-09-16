@@ -1,16 +1,15 @@
-import { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, memo, useSyncExternalStore } from 'react';
 import axios from 'axios';
 import { getApiKey } from '../auth';
 import liveStream from '../liveStream';
 import { sessionStore } from '../sessionStore';
 import { safeMessageText, messagePreview, viewOnceInnerType } from '../messageText';
 import { useTheme } from '../ThemeContext';
-import { UserCircle, Search, MessageSquare, LoaderCircle, Lock, Reply, SmilePlus, Download, FileText, MapPin } from 'lucide-react';
+import { UserCircle, Search, MessageSquare, LoaderCircle, Lock, Reply, SmilePlus, Download, FileText, MapPin, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import ChatInputForm from '../components/ChatInputForm';
 import EmojiPicker from '../components/EmojiPicker';
 import ChatAutomationsModal from '../components/ChatAutomationsModal';
-import { Zap } from 'lucide-react';
 
 const SERVER_URL = (import.meta.env.VITE_WPPCONNECT_URL || '').replace(/\/$/, '');
 const API_URL = `${SERVER_URL}/api`;
@@ -198,7 +197,22 @@ function ChatAvatar({ pic, size = 32, theme }) {
   return <UserCircle style={{ width: size, height: size }} className={`shrink-0 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`} />;
 }
 
-function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReact, activeChatId }) {
+// Memoized timestamp renderer: `toLocaleTimeString` / `toLocaleString` are
+// surprisingly expensive (ICU), and bubbles/sidebar rows re-render frequently.
+// Memoizing per (seconds, long) keeps that cost down to one call per change.
+// A missing/zero timestamp renders nothing instead of a bogus "12:00 AM".
+const Timestamp = memo(function Timestamp({ seconds, long, className }) {
+  const label = useMemo(() => {
+    if (!seconds) return '';
+    const d = new Date(seconds * 1000);
+    return long
+      ? d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+      : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }, [seconds, long]);
+  return <span className={className}>{label}</span>;
+});
+
+const MessageBubble = memo(function MessageBubble({ message, theme, apiKey, reactions, onReply, onReact, activeChatId }) {
   const [showReactions, setShowReactions] = useState(false);
   const type = viewOnceInnerType(message);
   const isMe = message.fromMe || message.isSentByMe || message.isSendByMe;
@@ -210,6 +224,26 @@ function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReac
   const isGroupChat = message.isGroupMsg === true || message.isGroup === true
     || (typeof activeChatId === 'string' && activeChatId.endsWith('@g.us'));
   const senderTitle = isGroupChat ? groupSenderDisplayName(message) : '';
+
+  // Merge live-stream reactions (authoritative) with the stored ones the
+  // durable inbox attached. Memoized so a parent re-render (e.g. a new bubble
+  // elsewhere in the list) keeps a stable array reference, which lets React
+  // bail out of re-rendering this bubble via the memo check below.
+  const mergedReactions = useMemo(() => {
+    const live = reactions || [];
+    const stored = message._reactions || [];
+    const visited = new Set();
+    const out = [];
+    for (const r of live) {
+      const k = `${r.senderId}:${r.emoji}`;
+      if (!visited.has(k)) { visited.add(k); out.push(r); }
+    }
+    for (const s of stored) {
+      const k = `${s.senderId}:${s.emoji}`;
+      if (!visited.has(k)) { visited.add(k); out.push(s); }
+    }
+    return out;
+  }, [reactions, message._reactions]);
 
   const quote = (() => {
     const q = message.quotedMsgObj || message.quotedMsg || (message.quotedMsgObj?.value);
@@ -276,9 +310,9 @@ function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReac
         )}
       </div>
 
-      {reactions.length > 0 && (
+      {mergedReactions.length > 0 && (
         <div className={`flex flex-wrap gap-1 mt-1 ${isMe ? '' : ''}`}>
-          {reactions.map((r, i) => (
+          {mergedReactions.map((r, i) => (
             <span key={i} className={`text-xs px-2 py-0.5 rounded-full border ${theme === 'dark' ? 'bg-[#12151a] border-[#262931] text-slate-300' : 'bg-white border-slate-200 text-slate-600'}`}>
               {r.emoji}
             </span>
@@ -287,9 +321,7 @@ function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReac
       )}
 
       <div className={`flex items-center gap-2 mt-0.5 ${isMe ? 'flex-row-reverse' : ''}`}>
-        <span className={`text-[10px] ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
-          {new Date((message.timestamp || 0) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-        </span>
+        <Timestamp seconds={message.timestamp} className={`text-[10px] ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`} />
         {onReply && (
           <button onClick={() => onReply(message)} title="Reply"
             className={`p-1 rounded ${theme === 'dark' ? 'text-slate-500 hover:text-indigo-400' : 'text-slate-400 hover:text-indigo-600'}`}>
@@ -314,7 +346,7 @@ function MessageBubble({ message, theme, apiKey, reactions = [], onReply, onReac
       )}
     </div>
   );
-}
+});
 
 // The open conversation's message list - isolated in its own component that
 // subscribes ONLY to THIS chat's version. A message arriving in any other chat
@@ -393,16 +425,17 @@ function ActiveChatMessages({ chatId, apiKey, theme, hasMore, loadingEarlier, on
         </button>
       )}
       {messages.map((msg, idx) => {
-        const live = liveReactions[canonicalId(msg)] || [];
-        const stored = msg._reactions || [];
-        const merged = [...live, ...stored.filter(s => !live.some(l => l.senderId === s.senderId && l.emoji === s.emoji))];
         return (
           <MessageBubble
             key={msgId(msg) || idx}
             message={msg}
             theme={theme}
             apiKey={apiKey}
-            reactions={merged}
+            // Pass the live reactions array directly (stable reference per
+            // message; `MessageBubble` merges in the stored _reactions via
+            // useMemo). This keeps `onReply`/`onReact` + memo able to bail out
+            // of re-rendering bubbles untouched by a chat update.
+            reactions={liveReactions[canonicalId(msg)]}
             onReply={onReply}
             onReact={onReact}
             activeChatId={chatId}
@@ -581,8 +614,13 @@ export default function LiveInbox() {
       for (const chat of mapped) {
         if (chat.profilePic) liveStream.setAvatar(chat.id, chat.profilePic);
       }
-      setApiChats(mapped);
-      try { localStorage.setItem(CHATS_CACHE_KEY(key), JSON.stringify({ chats: mapped, at: Date.now() })); } catch (_) {}
+      // Only update the chat list when at least one request succeeded.
+      // Promise.allSettled never throws, so when both fail `mapped` is []
+      // and we must NOT replace the valid cache that was just rendered.
+      if (mapped.length > 0 || inboxRes.status === 'fulfilled' || liveRes.status === 'fulfilled') {
+        setApiChats(mapped);
+        try { localStorage.setItem(CHATS_CACHE_KEY(key), JSON.stringify({ chats: mapped, at: Date.now() })); } catch (_) {}
+      }
     } catch (err) {
       console.error("Failed to load chat list", err);
     }
@@ -592,7 +630,10 @@ export default function LiveInbox() {
     try {
       const res = await axios.get(`${API_URL}/contacts`, { headers: { 'x-api-key': key } });
       const contactMap = {};
-      res.data.contacts.forEach(c => { contactMap[c.id._serialized] = c; });
+      // Legacy /contacts nests the arrays: { contacts: { all, contacts, groups } }.
+      // Older payloads may also carry a bare array at res.data.contacts.
+      const list = (res.data?.contacts?.contacts) || (Array.isArray(res.data?.contacts) ? res.data.contacts : []);
+      list.forEach(c => { const id = c.id?._serialized || c.id; if (id) contactMap[id] = c; });
       setContacts(contactMap);
     } catch (err) {
       console.error("Failed to load contacts", err);
@@ -976,7 +1017,7 @@ export default function LiveInbox() {
                       <div className="flex justify-between items-baseline mb-1">
                         <h3 className={`font-semibold text-sm truncate pr-2 ${theme === 'dark' ? 'text-slate-200' : 'text-slate-800'}`}>{chat.displayName && !chat.displayName.includes('@') ? chat.displayName : (resolveName(statusSenderOf(chat.id) || chat.id))}</h3>
                         <span className={`text-[10px] shrink-0 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
-                          {chat.isStatus ? (lastMsg?.timestamp ? new Date(lastMsg.timestamp * 1000).toLocaleTimeString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '') : (lastMsg?.timestamp ? new Date(lastMsg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (hasLive ? 'Live' : ''))}
+                          {chat.isStatus ? (lastMsg?.timestamp ? <Timestamp long seconds={lastMsg.timestamp} /> : '') : (lastMsg?.timestamp ? <Timestamp seconds={lastMsg.timestamp} /> : (hasLive ? 'Live' : ''))}
                         </span>
                       </div>
                       <div className="flex items-center justify-between gap-2">

@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { setApiKey } from '../auth';
 import liveStream from '../liveStream';
-import { MessageSquare, Phone, Lock, AlertCircle, ArrowRight, Server, ShieldCheck, KeyRound } from 'lucide-react';
+import { MessageSquare, Phone, Lock, AlertCircle, ArrowRight, Server, ShieldCheck, KeyRound, Copy, Check } from 'lucide-react';
 
 const SERVER_URL = (import.meta.env.VITE_WPPCONNECT_URL || '').replace(/\/$/, '');
 const API_URL = `${SERVER_URL}/api`;
@@ -16,7 +16,17 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [displayedRecoveryCode, setDisplayedRecoveryCode] = useState('');
+  const [copiedRecovery, setCopiedRecovery] = useState(false);
   const navigate = useNavigate();
+
+  const copyRecoveryCode = useCallback(() => {
+    if (!displayedRecoveryCode) return;
+    navigator.clipboard?.writeText(displayedRecoveryCode).catch(() => {}).finally(() => {
+      setCopiedRecovery(true);
+      setTimeout(() => setCopiedRecovery(false), 2500);
+    });
+  }, [displayedRecoveryCode]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -36,15 +46,16 @@ export default function Login() {
 
   const handleSignup = async (e) => {
     e.preventDefault();
-    setLoading(true); setError(''); setSuccessMsg('');
+    setLoading(true); setError(''); setSuccessMsg(''); setDisplayedRecoveryCode('');
     try {
       const res = await axios.post(`${API_URL}/auth/signup`, { phone, password });
       const key = res.data.data.apiKey;
       await setApiKey(key);
       axios.defaults.headers.common['x-api-key'] = key;
-      liveStream.connect(key);
-      setSuccessMsg(`ACCOUNT CREATED! Please save this Recovery Code to reset your password if you forget it: ${res.data.data.recoveryCode}`);
-      // Don't navigate immediately so they can see the code.
+      setDisplayedRecoveryCode(res.data.data.recoveryCode || '');
+      setSuccessMsg(`Account created! Save this Recovery Code — it is the only way to recover your account if you forget your password.`);
+      // Do NOT connect the live stream yet; Layout will connect once the
+      // user confirms they've saved the code and navigates to the dashboard.
       setLoading(false);
     } catch (err) {
       setError(err.response?.data?.error || 'Signup failed.');
@@ -54,14 +65,14 @@ export default function Login() {
 
   const handleReset = async (e) => {
     e.preventDefault();
-    setLoading(true); setError(''); setSuccessMsg('');
+    setLoading(true); setError(''); setSuccessMsg(''); setDisplayedRecoveryCode('');
     try {
       const res = await axios.post(`${API_URL}/auth/reset-password`, { phone, recoveryCode, newPassword: password });
       const key = res.data.data.apiKey;
       await setApiKey(key);
       axios.defaults.headers.common['x-api-key'] = key;
-      liveStream.connect(key);
-      setSuccessMsg(`Password reset! Your NEW Recovery Code is: ${res.data.data.newRecoveryCode}.`);
+      setDisplayedRecoveryCode(res.data.data.newRecoveryCode || '');
+      setSuccessMsg(`Password reset! Save this new Recovery Code — it replaces your previous one.`);
       setLoading(false);
     } catch (err) {
       setError(err.response?.data?.error || 'Password reset failed.');
@@ -140,10 +151,21 @@ export default function Login() {
               {successMsg && (
                 <div className="text-sm text-emerald-400 bg-emerald-500/10 p-4 rounded-lg border border-emerald-500/20">
                   <p className="font-bold mb-2 uppercase tracking-wide">Save this Recovery Code</p>
-                  <p className="font-mono text-lg mb-4 text-slate-900 dark:text-white p-2 bg-slate-50 dark:bg-[#0f1115] rounded border border-emerald-500/30 inline-block">
-                    {successMsg.split(': ')[1]}
-                  </p>
-                  <p className="text-xs text-slate-400 mb-4">You must save this code somewhere safe. If you forget your password, this code is the only way to recover your account.</p>
+                  <div className="flex items-center gap-2 mb-4">
+                    <p className="font-mono text-lg text-slate-900 dark:text-white p-2 bg-slate-50 dark:bg-[#0f1115] rounded border border-emerald-500/30 flex-1 min-w-0 overflow-x-auto whitespace-nowrap">
+                      {displayedRecoveryCode}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={copyRecoveryCode}
+                      className="px-3 py-2 rounded border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 transition-colors shrink-0 flex items-center gap-1.5"
+                      title="Copy recovery code"
+                    >
+                      {copiedRecovery ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                      <span className="text-xs font-semibold">{copiedRecovery ? 'Copied!' : 'Copy'}</span>
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-400 mb-4">This code is shown only once. If you lose it, the only way to reset a forgotten password is to contact support.</p>
                   <button type="button" onClick={() => navigate('/')} className="w-full bg-emerald-600 hover:bg-emerald-700 text-slate-900 dark:text-white font-medium py-2 rounded transition-colors">
                     I saved it, continue
                   </button>

@@ -45,7 +45,7 @@ export default function App() {
   // Set once globally so every page's API calls carry the key without each
   // page re-hydrating it or showing a loader while it resolves.
   useEffect(() => {
-    getApiKey().then(key => { if (key) axios.defaults.headers.common['x-api-key'] = key; });
+    getApiKey().then(key => { if (key) axios.defaults.headers.common['x-api-key'] = key; }).catch(() => {});
   }, []);
 
   return (
@@ -59,6 +59,7 @@ export default function App() {
             <Route path="/" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
             <Route path="/developer" element={<PrivateRoute><Developer /></PrivateRoute>} />
             <Route path="/inbox" element={<PrivateRoute><LiveInbox /></PrivateRoute>} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
       </BrowserRouter>

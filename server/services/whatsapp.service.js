@@ -881,42 +881,81 @@ class WhatsAppService {
     }, chatIds);
   }
 
-  async getContacts(apiKey) {
+  // Returns the full (cached) contact roster, or a searchable/sliced page.
+  //
+  // opts:
+  //   query  - optional substring filter matched against name fields + JID
+  //   limit  - page size (clamped to 1..500, default 50) when paginating
+  //   offset - zero-based row offset into the SORTED + filtered list
+  //
+  // When neither limit nor offset is supplied the original full shape
+  // { all, contacts, groups } is returned untouched (backward compatible).
+  // When paginating, the heavy `all` list is omitted from the payload and a
+  // `pagination` block (contactsTotal / groupsTotal / offset / limit /
+  // hasMore) is attached so clients can drive infinite scroll.
+  async getContacts(apiKey, { limit, offset, query = '' } = {}) {
     const session = this.getSession(apiKey);
     if (session.contactsCache && (Date.now() - session.contactsCache.timestamp < 300000)) {
-      return session.contactsCache.data;
+      // cache hit below
+    } else {
+      const rawContacts = await this.requireClient(apiKey).getAllContacts();
+
+      // Perform the heavy segregation on the backend, exactly as requested by the user
+      const contacts = rawContacts.filter(c => !c.isGroup && !String(c.id?._serialized || '').endsWith('@g.us'));
+      const groups = rawContacts.filter(c => c.isGroup || String(c.id?._serialized || '').endsWith('@g.us'));
+
+      // Backend sorting: Saved contacts first, then alphabetically
+      const contactName = (c) => c.name || c.formattedName || c.pushname || c.shortName || c.profileName || (c.id?._serialized || c.id || '');
+      const sortContacts = (a, b) => {
+        const aSaved = !!a.name;
+        const bSaved = !!b.name;
+        if (aSaved && !bSaved) return -1;
+        if (!aSaved && bSaved) return 1;
+
+        const aName = String(contactName(a)).toLowerCase();
+        const bName = String(contactName(b)).toLowerCase();
+        return aName.localeCompare(bName);
+      };
+
+      contacts.sort(sortContacts);
+      groups.sort(sortContacts);
+
+      session.contactsCache = { timestamp: Date.now(), data: { all: rawContacts, contacts, groups } };
+      this._rebuildContactsNameMap(session);
     }
-    const rawContacts = await this.requireClient(apiKey).getAllContacts();
-    
-    // Perform the heavy segregation on the backend, exactly as requested by the user
-    const contacts = rawContacts.filter(c => !c.isGroup && !String(c.id?._serialized || '').endsWith('@g.us'));
-    const groups = rawContacts.filter(c => c.isGroup || String(c.id?._serialized || '').endsWith('@g.us'));
 
-    // Backend sorting: Saved contacts first, then alphabetically
-    const contactName = (c) => c.name || c.formattedName || c.pushname || c.shortName || c.profileName || (c.id?._serialized || c.id || '');
-    const sortContacts = (a, b) => {
-       const aSaved = !!a.name;
-       const bSaved = !!b.name;
-       if (aSaved && !bSaved) return -1;
-       if (!aSaved && bSaved) return 1;
-       
-       const aName = String(contactName(a)).toLowerCase();
-       const bName = String(contactName(b)).toLowerCase();
-       return aName.localeCompare(bName);
-    };
+    const { all, contacts, groups } = session.contactsCache.data;
 
-    contacts.sort(sortContacts);
-    groups.sort(sortContacts);
-    
-    const data = {
-      all: rawContacts,
-      contacts: contacts,
-      groups: groups
+    // Optional query filter is applied AFTER caching (against the sorted,
+    // stable list) so pagination page-keys never go stale mid-browse.
+    const q = String(query || '').trim().toLowerCase();
+    const keep = (c) => !q || [c.name, c.formattedName, c.pushname, c.shortName, c.profileName, String(c.id?._serialized || c.id)]
+      .some(bit => bit && String(bit).toLowerCase().includes(q));
+    const filteredContacts = contacts.filter(keep);
+    const filteredGroups = groups.filter(keep);
+
+    // Pagination is opt-in: absent both params => legacy full dump.
+    const hasLimit = limit !== undefined && limit !== null && limit !== '';
+    const hasOffset = offset !== undefined && offset !== null && offset !== '';
+    if (!hasLimit && !hasOffset) {
+      return { all, contacts: filteredContacts, groups: filteredGroups };
+    }
+
+    const requestedLimit = Number(limit);
+    const requestedOffset = Number(offset);
+    const pageSize = Math.min(Math.max(Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.floor(requestedLimit) : 50, 1), 500);
+    const pageStart = Math.max(Number.isFinite(requestedOffset) ? Math.floor(requestedOffset) : 0, 0);
+    return {
+      contacts: filteredContacts.slice(pageStart, pageStart + pageSize),
+      groups: filteredGroups.slice(pageStart, pageStart + pageSize),
+      pagination: {
+        contactsTotal: filteredContacts.length,
+        groupsTotal: filteredGroups.length,
+        offset: pageStart,
+        limit: pageSize,
+        hasMore: pageStart + pageSize < Math.max(filteredContacts.length, filteredGroups.length),
+      },
     };
-    
-    session.contactsCache = { timestamp: Date.now(), data };
-    this._rebuildContactsNameMap(session);
-    return data;
   }
   
   _rebuildContactsNameMap(session) {

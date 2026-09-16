@@ -41,6 +41,13 @@ export default function ChatAutomationsModal({ apiKey, theme, chatId, chatName, 
       .finally(() => setLoading(false));
   }, [apiKey, chatId]);
 
+  // Close on Escape for keyboard accessibility.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   const eventMeta = spec?.events?.find(e => e.id === form.event);
   const placeholders = spec?.placeholders || [];
 
@@ -89,7 +96,14 @@ export default function ChatAutomationsModal({ apiKey, theme, chatId, chatName, 
   const actionLabel = (type) => ({ send_text: 'send text', send_media: 'send media', send_reaction: 'react', forward_to: 'relay' }[type] || type);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60"
+      onClick={onClose}
+      onKeyDown={(e) => e.key === 'Escape' && onClose?.()}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Automations for ${chatName || 'this chat'}`}
+    >
       <div
         onClick={e => e.stopPropagation()}
         className={`w-full max-w-lg max-h-[85vh] overflow-y-auto rounded-2xl border shadow-2xl ${theme === 'dark' ? 'bg-[#12151a] border-[#262931]' : 'bg-white border-slate-200'}`}

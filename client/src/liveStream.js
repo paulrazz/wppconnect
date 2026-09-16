@@ -71,24 +71,28 @@ const normalizeOut = (m) => {
 
 const isDeletedCopy = (m) => Boolean(m?.isDeleted || m?.isRevoked || String(m?.type || '').toLowerCase() === 'revoked');
 
-const pushMessage = (message, targetId) => {
+  const pushMessage = (message, targetId) => {
     if (!targetId) return false;
     if (!chats[targetId]) chats[targetId] = { messages: [] };
     const list = chats[targetId].messages;
     const key = dedupeKey(message);
-    const existing = key ? list.find(m => dedupeKey(m) === key) : null;
+    const existingIdx = key ? list.findIndex(m => dedupeKey(m) === key) : -1;
+    const existing = existingIdx >= 0 ? list[existingIdx] : null;
     if (isDeletedCopy(message)) {
       // A revoke/delete echo is a stub that mirrors an earlier message. Flag the
-      // original bubble (keeping its text) instead of rendering a twin.
+      // original bubble (keeping its text) instead of rendering a twin. Replace
+      // the object with a fresh reference so memoized bubbles see the change.
       if (existing) {
-        existing.isDeleted = true;
-        existing.isRevoked = true;
-        existing.deleted = true;
+        list[existingIdx] = { ...existing, isDeleted: true, isRevoked: true, deleted: true };
         return false;
       }
     }
     if (existing) return false;
     list.push(normalizeOut(message));
+    // Cap per-chat history at 400 messages to prevent unbounded memory growth
+    // during long-running sessions. The oldest messages are trimmed first;
+    // the API's durable inbox still holds full history on demand.
+    if (list.length > 400) list.splice(0, list.length - 400);
     return true;
   };
 
@@ -108,12 +112,11 @@ const pushMessage = (message, targetId) => {
     if (!statuses[senderId]) statuses[senderId] = [];
     const list = statuses[senderId];
     const key = dedupeKey(status);
-    const existing = key ? list.find(s => dedupeKey(s) === key) : null;
+    const existingIdx = key ? list.findIndex(s => dedupeKey(s) === key) : -1;
+    const existing = existingIdx >= 0 ? list[existingIdx] : null;
     if (isDeletedCopy(status)) {
       if (existing) {
-        existing.isDeleted = true;
-        existing.isRevoked = true;
-        existing.deleted = true;
+        list[existingIdx] = { ...existing, isDeleted: true, isRevoked: true, deleted: true };
         return false;
       }
     }
@@ -122,6 +125,8 @@ const pushMessage = (message, targetId) => {
     // Newest story last, so the viewer reads oldest → newest and the sidebar
     // "lastMessage" is the freshest status.
     list.sort((a, b) => (a.timestamp || a.t || 0) - (b.timestamp || b.t || 0));
+    // Cap per-sender status history at 50 entries
+    if (list.length > 50) list.splice(0, list.length - 50);
     return true;
   };
 
@@ -174,19 +179,18 @@ const pushMessage = (message, targetId) => {
       const refRaw = d.referenceId || d.refId || d.msgId || d.id || d.original?.id;
       const refId = (refRaw?._serialized || refRaw?.id || refRaw || '').replace(/_out$/, '');
       if (!refId) return;
-      const changedChats = [];
+      const changedChats = new Set();
       for (const chatId of Object.keys(chats)) {
-        for (const m of chats[chatId].messages) {
-          if ((msgId(m) || '').replace(/_out$/, '') === refId && !m.isDeleted) {
-            m.isDeleted = true;
-            m.isRevoked = true;
-            m.deleted = true;
-            changedChats.push(chatId);
+        const list = chats[chatId].messages;
+        for (let i = 0; i < list.length; i++) {
+          if ((msgId(list[i]) || '').replace(/_out$/, '') === refId && !list[i].isDeleted) {
+            list[i] = { ...list[i], isDeleted: true, isRevoked: true, deleted: true };
+            changedChats.add(chatId);
           }
         }
       }
-      if (changedChats.length) {
-        [...new Set(changedChats)].forEach(id => bumpChat(id));
+      if (changedChats.size) {
+        [...changedChats].forEach(id => bumpChat(id));
         notify();
       }
     });
@@ -204,19 +208,18 @@ const pushMessage = (message, targetId) => {
       const refRaw = d.referenceId || d.refId || d.msgId || d.id || d.original?.id;
       const refId = (refRaw?._serialized || refRaw?.id || refRaw || '').replace(/_out$/, '');
       if (!refId) return;
-      const changed = [];
+      const changed = new Set();
       for (const senderId of Object.keys(statuses)) {
-        for (const s of statuses[senderId]) {
-          if ((msgId(s) || '').replace(/_out$/, '') === refId && !s.isDeleted) {
-            s.isDeleted = true;
-            s.isRevoked = true;
-            s.deleted = true;
-            changed.push(senderId);
+        const list = statuses[senderId];
+        for (let i = 0; i < list.length; i++) {
+          if ((msgId(list[i]) || '').replace(/_out$/, '') === refId && !list[i].isDeleted) {
+            list[i] = { ...list[i], isDeleted: true, isRevoked: true, deleted: true };
+            changed.add(senderId);
           }
         }
       }
-      if (changed.length) {
-        [...new Set(changed)].forEach(id => bumpChat(id));
+      if (changed.size) {
+        [...changed].forEach(id => bumpChat(id));
         notify();
       }
     });
@@ -230,6 +233,9 @@ const pushMessage = (message, targetId) => {
     socket.on('avatar_ready', ({ id, dataUrl }) => {
       if (id && dataUrl && avatars[id] !== dataUrl) {
         avatars[id] = dataUrl;
+        // Cap avatars at 150 entries to prevent unbounded base64 memory growth.
+        const keys = Object.keys(avatars);
+        if (keys.length > 150) delete avatars[keys[0]];
         notify();
       }
     });
@@ -260,6 +266,15 @@ const pushMessage = (message, targetId) => {
       socket.disconnect();
       socket = null;
     }
+    // Clear all per-tenant in-memory data so logging out of account A and
+    // into B never leaks A's messages, avatars, or status history.
+    for (const k of Object.keys(chats)) delete chats[k];
+    for (const k of Object.keys(statuses)) delete statuses[k];
+    for (const k of Object.keys(reactions)) delete reactions[k];
+    for (const k of Object.keys(avatars)) delete avatars[k];
+    for (const k of Object.keys(chatNames)) delete chatNames[k];
+    for (const k of Object.keys(chatVersions)) delete chatVersions[k];
+    automationEvents.length = 0;
     apiKey = null;
     activeChatId = null;
     sessionStore.clear();
