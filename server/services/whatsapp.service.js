@@ -1033,6 +1033,7 @@ class WhatsAppService {
     // pushname onto the chat.name / contact.name when no other name is known.
     const botName = session.deviceInfo?.profileName;
     if (contact.name && (!botName || contact.name !== botName)) return contact.name;
+    if (contact.pushname && (!botName || contact.pushname !== botName)) return contact.pushname;
     
     if (contact.formattedName) return contact.formattedName;
     if (String(chatId).endsWith('@c.us')) {
@@ -1045,7 +1046,13 @@ class WhatsAppService {
   resolveChatDisplayName(session, chat) {
     const chatId = chat.id?._serialized || chat.id || '';
     const isGroup = chat.isGroup || String(chatId).endsWith('@g.us');
-    if (isGroup) return chat.name || chat.groupMetadata?.subject || null;
+    if (isGroup) {
+      if (chat.name) return chat.name;
+      if (chat.groupMetadata?.subject) return chat.groupMetadata.subject;
+      const cached = session.contactsNameMap?.get(chatId);
+      if (cached && cached.name) return cached.name;
+      return null;
+    }
     return this.resolveContactDisplayName(session, chatId, chat.contact || {});
   }
 
