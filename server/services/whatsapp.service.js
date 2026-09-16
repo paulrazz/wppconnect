@@ -451,9 +451,9 @@ class WhatsAppService {
       // /contacts readers never wait on this — it fills the store in the
       // background and swaps it in wholesale once done.
       clearInterval(session.contactsSyncTimer);
-      session.contactsSyncTimer = setInterval(() => void this.syncContacts(apiKey), CONTACTS_SYNC_INTERVAL_MS);
+      session.contactsSyncTimer = setInterval(() => void this.syncContacts(session.apiKey), CONTACTS_SYNC_INTERVAL_MS);
       if (session.contactsSyncTimer.unref) session.contactsSyncTimer.unref();
-      void this.syncContacts(apiKey);
+      void this.syncContacts(session.apiKey);
       return client;
     } catch (error) {
       session.client = null;
@@ -947,7 +947,7 @@ class WhatsAppService {
         // Nothing persisted yet (brand-new tenant). If the browser is already
         // up, kick the background sync so the next read has data — this still
         // never waits on the browser, it just self-heals in the background.
-        if (session.client && session.sessionStatus === 'CONNECTED') void this.syncContacts(apiKey);
+        if (session.client && session.sessionStatus === 'CONNECTED') void this.syncContacts(session.apiKey);
       }
     }
 
