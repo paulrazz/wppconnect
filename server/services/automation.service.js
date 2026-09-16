@@ -380,7 +380,7 @@ function normalizeRule(body) {
     }
   } else {
     const rawConditions = Array.isArray(body.trigger?.conditions) ? body.trigger.conditions : [];
-    if (!rawConditions.length) throw badRequest('At least one condition is required');
+    // Empty conditions = "Spontaneous Mode" — fires on every message. Allowed.
     if (rawConditions.length > 10) throw badRequest('A rule may have at most 10 conditions');
     triggerCondition = { match: body.trigger?.match === 'any' ? 'any' : 'all', conditions: rawConditions.map((c, i) => normalizeCondition(c, i, event)) };
   }
