@@ -793,6 +793,14 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
               >
                 <Plus className="w-3.5 h-3.5 mr-1" /> Add condition
               </button>
+              {draft.trigger.conditions?.length > 0 && (
+                <button 
+                  onClick={() => patchTrigger({ conditions: [] })}
+                  className={`ml-auto inline-flex items-center px-2 py-1.5 rounded-lg text-xs font-bold transition-colors ${theme === 'dark' ? 'text-emerald-400 hover:bg-emerald-500/10' : 'text-emerald-600 hover:bg-emerald-50'}`}
+                >
+                  <Sparkles className="w-3.5 h-3.5 mr-1" /> Switch to Spontaneous Mode
+                </button>
+              )}
               <button
                 onClick={() => addGroup([])}
                 disabled={countLeaves(draft.trigger.conditions) >= (spec.maxConditions || 10)}
