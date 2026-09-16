@@ -33,8 +33,8 @@ export default function ContactPickerModal({ apiKey, theme, onPick, onClose, tit
         axios.get(`${API}/contacts`, { headers: { 'x-api-key': apiKey } }),
         axios.get(`${API}/groups`, { headers: { 'x-api-key': apiKey } }),
       ]);
-      setContacts(c.data.contacts || c.data || []);
-      setGroups(g.data.groups || g.data || []);
+      setContacts(Array.isArray(c.data?.data) ? c.data.data : (Array.isArray(c.data) ? c.data : []));
+      setGroups(Array.isArray(g.data?.data) ? g.data.data : (Array.isArray(g.data) ? g.data : []));
     } catch (_) {
       setContacts([]);
       setGroups([]);
@@ -46,10 +46,10 @@ export default function ContactPickerModal({ apiKey, theme, onPick, onClose, tit
   useEffect(() => { load(); }, [load]);
 
   const q = query.trim().toLowerCase();
-  const contactsList = (contacts || [])
+  const contactsList = (Array.isArray(contacts) ? contacts : [])
     .filter(c => (c.id?._serialized || c.id))
     .filter(c => !q || contactName(c).toLowerCase().includes(q) || String(c.id?._serialized || c.id).toLowerCase().includes(q));
-  const groupsList = (groups || [])
+  const groupsList = (Array.isArray(groups) ? groups : [])
     .filter(g => (g.id?._serialized || g.id))
     .filter(g => !q || String(g.name || g.subject || contactName(g)).toLowerCase().includes(q))
     .filter(g => !adminOnlyGroups || g.iAmAdmin);
