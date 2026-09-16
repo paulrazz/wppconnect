@@ -1092,10 +1092,14 @@ export default function LiveInbox() {
               </div>
               <div className="min-w-0">
                 <h2 className={`font-bold text-lg truncate ${theme === 'dark' ? 'text-white' : 'text-slate-800'}`}>
-                  {isStatusChat(activeChatId) ? (resolveName(statusSenderOf(activeChatId)) || 'Status') : resolveName(activeChatId)}
+                  {isStatusChat(activeChatId) ? (resolveName(statusSenderOf(activeChatId)) || 'Status') : (
+                    activeRows.find(c => c.id === activeChatId)?.displayName || 
+                    chatRows.find(c => c.id === activeChatId)?.displayName || 
+                    resolveName(activeChatId)
+                  )}
                 </h2>
                 <p className={`text-[10px] font-semibold uppercase tracking-wide ${isStatusChat(activeChatId) ? (theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600') : (theme === 'dark' ? 'text-indigo-400' : 'text-indigo-600')}`}>
-                  {isStatusChat(activeChatId) ? 'Status updates' : 'Saved · live'}
+                  {isStatusChat(activeChatId) ? 'Status updates' : (contacts[activeChatId]?.pushname ? `~${contacts[activeChatId].pushname} · Saved live` : 'Saved · live')}
                 </p>
               </div>
               {!isStatusChat(activeChatId) && (
