@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const eventStore = require('./event-store.service');
 const inboxStore = require('./inbox-store.service');
+const { generateReply } = require('./llm.service');
 
 // Per-account sequential queue so AI replies go out one-by-one like a human.
 const _aiQueues = new Map();

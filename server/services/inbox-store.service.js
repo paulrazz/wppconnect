@@ -491,6 +491,30 @@ class InboxStore {
     };
   }
 
+  async getRecentFromMe(apiKey, chatId, limit = 20) {
+    await this.readyPromise;
+    if (!limit || limit <= 0 || !chatId) return [];
+    const rows = await DB.all(
+      `SELECT message_json FROM inbox_messages
+       WHERE api_key=? AND chat_id=? AND json_extract(message_json, '$.id.fromMe') = 1
+       ORDER BY stored_at DESC LIMIT ?`,
+      [apiKey, chatId, limit * 3]
+    );
+    const msgs = [];
+    for (const r of rows) {
+      if (!r.message_json) continue;
+      try {
+        const msg = JSON.parse(r.message_json);
+        const text = msg.body || msg.caption;
+        if (text && String(text).trim().length > 0) {
+          msgs.push(String(text).trim());
+          if (msgs.length >= limit) break;
+        }
+      } catch (e) { /* skip unparseable rows */ }
+    }
+    return msgs.reverse();
+  }
+
   async search(apiKey, query, limit = 25) {
     await this.readyPromise;
     if (!query || !String(query).trim()) return [];
