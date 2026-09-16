@@ -749,7 +749,16 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
               </div>
               <div className={`rounded-b-xl border overflow-hidden ${theme === 'dark' ? 'border-[#262931]' : 'border-slate-300'}`}>
           <div className="space-y-2 p-4">
-            {draft.trigger.conditions.map((condition, index) => (
+            {draft.trigger.conditions.length === 0 ? (
+              <div className={`p-5 text-center rounded-lg border border-dashed ${theme === 'dark' ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-emerald-400/50 bg-emerald-50'}`}>
+                <div className={`text-sm font-bold flex items-center justify-center gap-2 ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>
+                  <Sparkles className="w-4 h-4" /> Spontaneous Mode Active
+                </div>
+                <p className={`text-xs mt-1.5 max-w-sm mx-auto leading-relaxed ${theme === 'dark' ? 'text-emerald-500/70' : 'text-emerald-700/70'}`}>
+                  This automation has no conditions. It will instantly trigger on <strong>every single message</strong> received in this chat.
+                </p>
+              </div>
+            ) : draft.trigger.conditions.map((condition, index) => (
               <ConditionNodeEditor
                 key={index}
                 node={condition}
