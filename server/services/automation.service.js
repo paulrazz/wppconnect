@@ -1160,6 +1160,7 @@ class AutomationService {
               if (isRateLimit) {
                 if (retries >= maxRetries) {
                   console.error(`[AI Rate Limit] Max retries reached for ${ctx.chatId}. Dropping message.`);
+                  await whatsappService.stopTyping(apiKey, ctx.chatId).catch(() => {});
                   break; // Give up
                 }
                 const waitMs = parseInt(error.message.split(':')[1]) || 15000;
