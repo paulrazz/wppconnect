@@ -1017,7 +1017,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
                     const provider = e.target.value;
                     let model = aiConfig.model;
                     if (provider === 'gemini') model = 'gemini-3.6-flash';
-                    else if (provider === 'groq') model = 'llama-3.1-8b-instant';
+                    else if (provider === 'groq') model = 'llama3-8b-8192';
                     else if (provider === 'openrouter') model = 'anthropic/claude-3.5-sonnet';
                     setAiConfig(prev => ({ ...prev, provider, model }));
                   }}
