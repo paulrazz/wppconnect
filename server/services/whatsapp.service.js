@@ -453,7 +453,8 @@ class WhatsAppService {
       clearInterval(session.contactsSyncTimer);
       session.contactsSyncTimer = setInterval(() => void this.syncContacts(session.apiKey), CONTACTS_SYNC_INTERVAL_MS);
       if (session.contactsSyncTimer.unref) session.contactsSyncTimer.unref();
-      void this.syncContacts(session.apiKey);
+      // Delay initial sync to ensure WAPI is injected, or rely on stateChange
+      setTimeout(() => void this.syncContacts(session.apiKey), 5000);
       return client;
     } catch (error) {
       session.client = null;
@@ -631,7 +632,10 @@ class WhatsAppService {
       this.io?.to(`session_${session.apiKey}`).emit('whatsapp_state', state);
       void webhooks.emit('whatsapp.state', { state });
       if (['CONFLICT', 'UNLAUNCHED'].includes(state)) client.useHere().catch((error) => console.warn('WhatsApp takeover skipped:', error.message));
-      if (state === 'CONNECTED') this.setStatus(session, 'CONNECTED');
+      if (state === 'CONNECTED') {
+        this.setStatus(session, 'CONNECTED');
+        void this.syncContacts(session.apiKey);
+      }
       if (['UNPAIRED', 'UNPAIRED_IDLE', 'DISCONNECTED'].includes(state)) this.setStatus(session, 'DISCONNECTED');
     });
   }
