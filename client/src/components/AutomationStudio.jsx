@@ -1049,6 +1049,18 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
                   className={inputCls(theme)}
                 />
               </div>
+              <div>
+                <label className={`block font-semibold mb-1.5 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Chat Persona Context Limit</label>
+                <input 
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={aiConfig.personaContextCount !== undefined ? aiConfig.personaContextCount : 20}
+                  onChange={e => setAiConfig(prev => ({ ...prev, personaContextCount: parseInt(e.target.value) || 0 }))}
+                  className={inputCls(theme)}
+                />
+                <span className={`text-[10px] mt-1 block ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>Number of your recent messages sent in this specific chat to inject into the AI prompt so it learns your natural tone and persona.</span>
+              </div>
             </div>
             <div className="mt-6 flex justify-end gap-3">
               <button onClick={() => setAiConfigOpen(false)} className={`px-4 py-2 text-sm font-semibold rounded-lg ${theme === 'dark' ? 'hover:bg-white/5 text-slate-300' : 'hover:bg-slate-100 text-slate-600'}`}>Cancel</button>
