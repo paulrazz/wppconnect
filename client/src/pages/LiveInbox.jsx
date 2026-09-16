@@ -573,7 +573,7 @@ export default function LiveInbox() {
         if (!m.id) return;
         const existing = merged.get(m.id);
         if (!existing) { merged.set(m.id, m); return; }
-        if (m.displayName && m.displayName !== (id.split('@')[0] || id)) existing.displayName = m.displayName;
+        if (m.displayName && m.displayName !== (m.id.split('@')[0] || m.id)) existing.displayName = m.displayName;
       });
       const mapped = [...merged.values()].filter(c => c.id);
       // Seed the live avatar map with the already-decorated profile pictures
