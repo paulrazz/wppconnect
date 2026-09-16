@@ -43,13 +43,12 @@ export default function ContactPickerModal({ apiKey, theme, onPick, onClose, tit
     
     setLoading(true);
     try {
-      // The user is right! Fetching /groups from the backend causes a 10s delay.
-      // /contacts already returns everything (both c.us and g.us).
-      const c = await axios.get(`${API}/contacts`, { headers: { 'x-api-key': apiKey } });
-      const rawContacts = Array.isArray(c.data?.data) ? c.data.data : (Array.isArray(c.data) ? c.data : []);
+      const res = await axios.get(`${API}/contacts`, { headers: { 'x-api-key': apiKey } });
+      const payload = res.data?.data || {};
       
-      const actualContacts = rawContacts.filter(c => !c.isGroup && !String(c.id?._serialized || '').endsWith('@g.us'));
-      const actualGroups = rawContacts.filter(c => c.isGroup || String(c.id?._serialized || '').endsWith('@g.us'));
+      // The backend now intelligently separates them natively so the UI doesn't have to work
+      const actualContacts = Array.isArray(payload.contacts) ? payload.contacts : [];
+      const actualGroups = Array.isArray(payload.groups) ? payload.groups : [];
       
       __fastContactsCache = actualContacts;
       __fastGroupsCache = actualGroups;

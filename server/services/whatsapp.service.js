@@ -886,16 +886,27 @@ class WhatsAppService {
     if (session.contactsCache && (Date.now() - session.contactsCache.timestamp < 300000)) {
       return session.contactsCache.data;
     }
-    const data = await this.requireClient(apiKey).getAllContacts();
+    const rawContacts = await this.requireClient(apiKey).getAllContacts();
+    
+    // Perform the heavy segregation on the backend, exactly as requested by the user
+    const contacts = rawContacts.filter(c => !c.isGroup && !String(c.id?._serialized || '').endsWith('@g.us'));
+    const groups = rawContacts.filter(c => c.isGroup || String(c.id?._serialized || '').endsWith('@g.us'));
+    
+    const data = {
+      all: rawContacts,
+      contacts: contacts,
+      groups: groups
+    };
+    
     session.contactsCache = { timestamp: Date.now(), data };
     this._rebuildContactsNameMap(session);
     return data;
   }
-
+  
   _rebuildContactsNameMap(session) {
     const map = new Map();
-    if (session.contactsCache?.data) {
-      for (const c of session.contactsCache.data) {
+    if (session.contactsCache?.data?.all) {
+      for (const c of session.contactsCache.data.all) {
         const id = c.id?._serialized || c.id;
         if (typeof id === 'string' && id) map.set(id, c);
       }
