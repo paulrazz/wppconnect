@@ -159,7 +159,9 @@ const ACTION_META = {
     fields: [
       { name: 'text', label: 'Reply text', type: 'textarea', required: true },
       { name: 'quoted', label: 'Quote the received message', type: 'bool', default: true },
-      { name: 'delay', label: 'Delay (seconds)', type: 'number', min: 0, max: 3600, default: 0 },
+      { name: 'delay', label: 'Minimum delay (seconds)', type: 'number', min: 0, max: 3600, default: 0 },
+      { name: 'randomDelay', label: 'Add random jitter (+0 to 5s)', type: 'bool', default: true },
+      { name: 'simulateTyping', label: 'Show "typing..." indicator', type: 'bool', default: true },
     ],
   },
   send_media: {
@@ -169,21 +171,27 @@ const ACTION_META = {
       { name: 'filename', label: 'Filename', type: 'text' },
       { name: 'caption', label: 'Caption', type: 'textarea' },
       { name: 'quoted', label: 'Quote the received message', type: 'bool', default: true },
-      { name: 'delay', label: 'Delay (seconds)', type: 'number', min: 0, max: 3600, default: 0 },
+      { name: 'delay', label: 'Minimum delay (seconds)', type: 'number', min: 0, max: 3600, default: 0 },
+      { name: 'randomDelay', label: 'Add random jitter (+0 to 5s)', type: 'bool', default: true },
+      { name: 'simulateTyping', label: 'Show "typing..." indicator', type: 'bool', default: true },
     ],
   },
   send_reaction: {
     label: 'React with an emoji',
     fields: [
       { name: 'reaction', label: 'Emoji', type: 'text', required: true },
-      { name: 'delay', label: 'Delay (seconds)', type: 'number', min: 0, max: 3600, default: 0 },
+      { name: 'delay', label: 'Minimum delay (seconds)', type: 'number', min: 0, max: 3600, default: 0 },
+      { name: 'randomDelay', label: 'Add random jitter (+0 to 5s)', type: 'bool', default: true },
+      { name: 'simulateTyping', label: 'Show "typing..." indicator', type: 'bool', default: true },
     ],
   },
   forward_to: {
     label: 'Relay / forward to another chat',
     fields: [
       { name: 'to', label: 'Destination chat or number', type: 'text', required: true },
-      { name: 'delay', label: 'Delay (seconds)', type: 'number', min: 0, max: 3600, default: 0 },
+      { name: 'delay', label: 'Minimum delay (seconds)', type: 'number', min: 0, max: 3600, default: 0 },
+      { name: 'randomDelay', label: 'Add random jitter (+0 to 5s)', type: 'bool', default: true },
+      { name: 'simulateTyping', label: 'Show "typing..." indicator', type: 'bool', default: true },
     ],
   },
   remove_member: {
@@ -960,19 +968,10 @@ class AutomationService {
   }
 
   _schedule(apiKey, rule, ctx, eventData, whatsappService) {
-    const delay = Math.max(0, Math.min(Number(rule.action?.delay) || 0, MAX_DELAY));
-    const run = () => {
-      this._execute(apiKey, rule, ctx, eventData, whatsappService).catch((error) => {
-        console.error(`[automation] Rule "${rule.name}" failed:`, error.message);
-        this._emit(apiKey, { ruleId: rule.id, name: rule.name, status: 'error', actionType: rule.action?.type, error: error.message, at: new Date().toISOString() });
-      });
-    };
-    if (delay) {
-      const timer = setTimeout(run, delay * 1000);
-      if (timer.unref) timer.unref();
-    } else {
-      run();
-    }
+    this._execute(apiKey, rule, ctx, eventData, whatsappService).catch((error) => {
+      console.error(`[automation] Rule "${rule.name}" failed:`, error.message);
+      this._emit(apiKey, { ruleId: rule.id, name: rule.name, status: 'error', actionType: rule.action?.type, error: error.message, at: new Date().toISOString() });
+    });
   }
 
   _emit(apiKey, payload) {
