@@ -339,7 +339,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
       .then(res => setRules((Array.isArray(res.data?.data) ? res.data.data : []).map(normalizeRule)))
       .catch(() => { setRules([]); setLoadError(true); });
     axios.get(`${SERVER_URL}/api/v1/automation/config`, { headers: { 'x-api-key': apiKey } })
-      .then(res => { if (res.data?.provider) setAiConfig(res.data); })
+      .then(res => { if (res.data?.data?.provider) setAiConfig(res.data.data); })
       .catch(() => {});
     axios.get(`${SERVER_URL}/api/v1/automation/spec`, { headers: { 'x-api-key': apiKey } })
       .then(res => setSpec(res.data?.data))
