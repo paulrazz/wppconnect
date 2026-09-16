@@ -631,8 +631,11 @@ export default function LiveInbox() {
       const res = await axios.get(`${API_URL}/contacts`, { headers: { 'x-api-key': key } });
       const contactMap = {};
       // Legacy /contacts nests the arrays: { contacts: { all, contacts, groups } }.
-      // Older payloads may also carry a bare array at res.data.contacts.
-      const list = (res.data?.contacts?.contacts) || (Array.isArray(res.data?.contacts) ? res.data.contacts : []);
+      // We must map 'all' so that we have names for both individuals and groups.
+      const payload = res.data?.contacts || {};
+      const list = Array.isArray(payload.all) ? payload.all : (
+        Array.isArray(payload) ? payload : (Array.isArray(payload.contacts) ? payload.contacts : [])
+      );
       list.forEach(c => { const id = c.id?._serialized || c.id; if (id) contactMap[id] = c; });
       setContacts(contactMap);
     } catch (err) {
@@ -989,7 +992,7 @@ export default function LiveInbox() {
               )}
             </div>
           ) : (
-            activeRows.map(chat => {
+            activeRows.slice(0, 150).map(chat => {
                 const lastMsg = chat.lastMessage;
                 const preview = lastMsg?.previewText || messagePreview(lastMsg) || '';
                 const isActive = activeChatId === chat.id;
