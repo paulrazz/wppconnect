@@ -478,7 +478,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
   };
   const [pickerOpen, setPickerOpen] = useState(null);
   const [aiConfigOpen, setAiConfigOpen] = useState(false);
-  const [aiConfig, setAiConfig] = useState({ provider: "gemini", model: "gemini-3.6-flash", apiKey: "", personaContextCount: 20 });
+  const [aiConfig, setAiConfig] = useState({ provider: "gemini", model: "gemini-3.6-flash", apiKey: "", personaContextCount: 20, globalPaceSeconds: 15 });
   const [aiTesting, setAiTesting] = useState({ busy: false, result: null });
   const eventMeta = spec?.events?.find(e => e.id === draft?.trigger?.event);
   
@@ -1069,6 +1069,18 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
                   className={inputCls(theme)}
                 />
                 <span className={`text-[10px] mt-1 block ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>The amount of your recent outgoing messages from the triggered chat to inject into the AI prompt, allowing it to dynamically adapt to your persona for that specific person or group.</span>
+              </div>
+              <div>
+                <label className={`block font-semibold mb-1.5 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>AI Reply Pace Interval (seconds)</label>
+                <input 
+                  type="number"
+                  min="0"
+                  max="300"
+                  value={aiConfig.globalPaceSeconds !== undefined ? aiConfig.globalPaceSeconds : 15}
+                  onChange={e => setAiConfig(prev => ({ ...prev, globalPaceSeconds: parseInt(e.target.value) || 0 }))}
+                  className={inputCls(theme)}
+                />
+                <span className={`text-[10px] mt-1 block ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>The minimum wait time between sending AI replies when multiple chats trigger at the same time. Ensures the bot replies to chats one-by-one like a human.</span>
               </div>
             </div>
             <div className="mt-6 flex justify-end gap-3">
