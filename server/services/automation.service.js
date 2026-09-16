@@ -1109,9 +1109,9 @@ class AutomationService {
           const personaCount = aiConfig.personaContextCount !== undefined ? Number(aiConfig.personaContextCount) : 20;
           if (personaCount > 0) {
             try {
-              const personaMsgs = await inboxStore.getRecentFromMe(apiKey, personaCount);
+              const personaMsgs = await inboxStore.getRecentFromMe(apiKey, ctx.chatId, personaCount);
               if (personaMsgs && personaMsgs.length > 0) {
-                prompt += `\n\nTo help you perfectly mirror the human owner's tone and communication style, here are ${personaMsgs.length} of their most recent spontaneous messages sent across various chats:\n` + personaMsgs.map(m => `"${m}"`).join('\n') + `\n\nAdopt this exact natural casing, slang, sentence length, and vocabulary.`;
+                prompt += `\n\nTo help you perfectly mirror the human owner's tone and communication style, here are ${personaMsgs.length} of their most recent spontaneous messages sent specifically in this exact chat:\n` + personaMsgs.map(m => `"${m}"`).join('\n') + `\n\nAdopt this exact natural casing, slang, sentence length, and vocabulary.`;
               }
             } catch (e) {
               console.error('[AI Persona] Failed to fetch persona context:', e);
