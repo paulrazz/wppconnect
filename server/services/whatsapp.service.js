@@ -1080,14 +1080,25 @@ class WhatsAppService {
   async getGroups(apiKey) {
     const client = this.requireClient(apiKey);
     const session = this.getSession(apiKey);
+    
+    // 5 minute TTL cache to make groups load instantly
+    if (session.groupsCache && (Date.now() - session.groupsCache.timestamp < 300000)) {
+      return session.groupsCache.data;
+    }
+    
     const groups = await client.getAllGroups();
     const myJid = session?.myJid || '';
-    return groups.map(g => {
+    const mapped = groups.map(g => {
       const parts = g.participants || [];
       const me = parts.find(p => p.id === myJid || (p.id && p.id._serialized === myJid));
       return { ...g, iAmAdmin: me ? Boolean(me.isAdmin || me.isSuperAdmin) : false };
     });
+    
+    session.groupsCache = { timestamp: Date.now(), data: mapped };
+    return mapped;
   }
+  
+
 
   async inspectIdentity(apiKey, id) {
     const client = this.requireClient(apiKey);
