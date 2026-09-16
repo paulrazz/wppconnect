@@ -1044,7 +1044,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
                   {aiConfig.provider === 'groq' && (
                     <>
                       <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (Extremely Fast)</option>
-                      <option value="llama-3.1-70b-versatile">llama-3.1-70b-versatile (Powerful)</option>
+                      <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile (Powerful)</option>
                       <option value="mixtral-8x7b-32768">mixtral-8x7b-32768</option>
                     </>
                   )}

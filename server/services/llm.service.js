@@ -54,7 +54,7 @@ async function generateReply(config, systemPrompt, messagesContext) {
       'Authorization': `Bearer ${config.apiKey}`
     },
     body: JSON.stringify({
-      model: config.model || (provider === 'groq' ? 'llama-3.1-8b-instant' : 'openai/gpt-3.5-turbo'),
+      model: (config.model === 'llama-3.1-70b-versatile' ? 'llama-3.3-70b-versatile' : config.model) || (provider === 'groq' ? 'llama-3.3-70b-versatile' : 'openai/gpt-3.5-turbo'),
       messages: formattedMessages,
     })
   });
