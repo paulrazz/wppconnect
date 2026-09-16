@@ -590,7 +590,7 @@ export default function LiveInbox() {
       // id-fallback display names with real contact names.
       const [inboxRes, liveRes] = await Promise.allSettled([
         axios.get(`${API_URL}/inbox`, { headers: { 'x-api-key': key } }),
-        axios.get(`${API_URL}/chats`, { headers: { 'x-api-key': key } }),
+        axios.get(`${API_URL}/chats?limit=500`, { headers: { 'x-api-key': key } }),
       ]);
       const inboxChats = inboxRes.status === 'fulfilled' && Array.isArray(inboxRes.value.data?.chats) ? inboxRes.value.data.chats : [];
       const liveChats = liveRes.status === 'fulfilled' && Array.isArray(liveRes.value.data?.chats) ? liveRes.value.data.chats : [];
@@ -862,6 +862,7 @@ export default function LiveInbox() {
     return Object.values(map).sort((a, b) => (b.lastMessage?.timestamp || 0) - (a.lastMessage?.timestamp || 0));
   }, [apiChats, liveChats, liveVersion, contacts, avatars]);
   const [sidebarTab, setSidebarTab] = useState('chats');
+  const [chatDisplayLimit, setChatDisplayLimit] = useState(20);
   const chatRows = useMemo(() => sidebar.filter(c => !c.isStatus), [sidebar]);
   const statusRows = useMemo(() => sidebar.filter(c => c.isStatus), [sidebar]);
   const activeRows = sidebarTab === 'status' ? statusRows : chatRows;
@@ -992,7 +993,8 @@ export default function LiveInbox() {
               )}
             </div>
           ) : (
-            activeRows.slice(0, 150).map(chat => {
+            <>
+              {activeRows.slice(0, chatDisplayLimit).map(chat => {
                 const lastMsg = chat.lastMessage;
                 const preview = lastMsg?.previewText || messagePreview(lastMsg) || '';
                 const isActive = activeChatId === chat.id;
@@ -1034,7 +1036,18 @@ export default function LiveInbox() {
   </div>
                   </button>
                 );
-              })
+              })}
+              {activeRows.length > chatDisplayLimit && (
+                <div className="p-3">
+                  <button
+                    onClick={() => setChatDisplayLimit(prev => prev + 5)}
+                    className={`w-full py-2 text-xs font-semibold text-center rounded-lg transition-colors ${theme === 'dark' ? 'bg-[#1a1f28] text-indigo-400 hover:bg-[#232a35]' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'}`}
+                  >
+                    Load more (+{activeRows.length - chatDisplayLimit} left)
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
