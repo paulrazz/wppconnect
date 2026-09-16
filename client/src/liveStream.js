@@ -144,7 +144,7 @@ const isDeletedCopy = (m) => Boolean(m?.isDeleted || m?.isRevoked || String(m?.t
           // If it's from them, they literally hand us their pushname in sender.
           const contactName = message.fromMe || message.isSentByMe 
             ? (message?.chat?.name || message?.chat?.formattedName)
-            : (message?.sender?.pushname || message?.sender?.name || message?.sender?.formattedName || message?.chat?.name);
+            : (message?.sender?.name || message?.sender?.formattedName || message?.chat?.name);
           
           if (contactName && chatNames[chatId] !== contactName) {
             chatNames[chatId] = contactName;

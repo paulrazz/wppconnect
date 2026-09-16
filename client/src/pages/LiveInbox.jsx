@@ -834,7 +834,7 @@ export default function LiveInbox() {
     const names = liveStream.getChatNames();
     apiChats.forEach(c => {
       // Forcibly heal missing or ID-only names using the freshly synced contacts list
-      const healedName = contacts[c.id]?.name || contacts[c.id]?.pushname;
+      const healedName = contacts[c.id]?.name;
       const displayName = c.chatName || names[c.id] || healedName || c.displayName;
       map[c.id] = { ...c, displayName, isStatus: false, profilePic: c.profilePic || avatars[c.id] || null };
     });

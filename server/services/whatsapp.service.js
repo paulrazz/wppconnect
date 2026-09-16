@@ -1033,7 +1033,6 @@ class WhatsAppService {
     // pushname onto the chat.name / contact.name when no other name is known.
     const botName = session.deviceInfo?.profileName;
     if (contact.name && (!botName || contact.name !== botName)) return contact.name;
-    if (contact.pushname && (!botName || contact.pushname !== botName)) return contact.pushname;
     
     if (contact.formattedName) return contact.formattedName;
     if (String(chatId).endsWith('@c.us')) {
