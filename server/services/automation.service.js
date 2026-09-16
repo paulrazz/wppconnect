@@ -1100,7 +1100,7 @@ class AutomationService {
           while (retries <= maxRetries) {
             // 2. Fetch context (last N messages) - done inside queue to ensure it's completely fresh
             const limit = Number(action.contextLimit) || 10;
-            const chatMsgsResult = await whatsappService.getMessages(apiKey, ctx.chatId, limit);
+            const chatMsgsResult = await inboxStore.getMessages(apiKey, ctx.chatId, { count: limit });
             const chatMsgs = Array.isArray(chatMsgsResult) ? chatMsgsResult : (chatMsgsResult?.messages || []);
             const contextMessages = [...chatMsgs].reverse().map(m => {
                const isMe = (m.id.fromMe || (m.author && m.author === myJid));
