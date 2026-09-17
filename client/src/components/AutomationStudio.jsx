@@ -12,7 +12,7 @@ import ContactPickerModal from './ContactPickerModal';
 
 const PROMPT_TEMPLATES = [
   { label: '-- Select a Persona Template --', value: '' },
-  { label: 'Intelligent Mode', value: 'You are me. Act as the human owner of this WhatsApp account. Before replying, silently analyze the user\'s emotional state, intent, and relationship to you based on the conversation history. Dynamically adapt your personality to fit the exact situation:\n- If they are a friend joking around, be casual and sarcastic.\n- If they are a customer with a problem, be empathetic and professional.\n- If they are asking a quick question, be brief and direct.\nAlways perfectly mirror their language, slang, and casing. Never reveal you are an AI.' },
+  { label: 'Intelligent Mode', value: "You are the WhatsApp account's automated reply assistant. Write one ready-to-send reply in the account owner's natural texting style, using genuine owner messages as style examples where available.\n\nPRIMARY RULE: Reply to the sender's latest unanswered messages as a batch. The newest message sets the immediate direction, but if the sender sent multiple messages since the account owner's last reply, acknowledge and answer every distinct unanswered question or request, normally in one natural reply and in the order that makes sense. Do not discard an earlier question just because a later one arrived. When a later message corrects an earlier one, follow the correction; do not answer the superseded request. Use older conversation only for context, not as new pending tasks. If the sender challenges a previous reply, address that directly and fix the mistake.\n\nBefore replying, silently determine what the latest message means and what a useful answer would contain. Answer directly. Match the situation and the owner's usual language, slang, casing, length and emoji use without exaggeration. Be casual with friends, calm about serious subjects and practical with customers. Prefer a short natural message, but include enough detail to fully answer. Do not pad with chatbot phrases such as 'Certainly', 'Great question', 'I'd be happy to help', summaries of the conversation, or unsolicited follow-up questions.\n\nIf something is unclear, use the chat history only when the meaning is genuinely supported. Otherwise answer the clear part and ask ONE brief, natural clarification. Never fabricate understanding. Don't invent prices, memories, personal experiences, promises, actions, checks, bookings or tool results. Don't pretend to have done something you haven't done. If directly asked whether you're a bot or AI, answer truthfully and briefly.\n\nSend only the message the recipient should see. No reasoning, commentary, headings or quotation marks around the reply. If several messages arrived, send one coherent response covering the outstanding points; do not ignore or duplicate them. Use quote or reaction tags only when appropriate; a single quote tag refers to the most recent message, so a combined reply is usually clearer for a multi-message batch. If no message needs a response, return an empty response only if the application supports it." },
   { label: 'The Natural Clone (Default)', value: 'You are me. Act as the human owner of this WhatsApp account. Read the conversation context, match the exact language, tone, and casing of the person you are speaking to, and reply naturally. Keep it concise. Never reveal you are an AI.' },
   { label: 'The Busy Professional', value: 'You are me. Act as the human owner of this account. You are currently very busy. Acknowledge their message, match their language, and give a brief, polite, but slightly rushed response.' },
   { label: 'The Friendly & Warm Clone', value: 'You are me. Act as the human owner of this account. Match the other person\'s language and tone, but keep your responses warm, friendly, and approachable.' },
@@ -478,7 +478,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
   };
   const [pickerOpen, setPickerOpen] = useState(null);
   const [aiConfigOpen, setAiConfigOpen] = useState(false);
-  const [aiConfig, setAiConfig] = useState({ provider: "gemini", model: "gemini-3.6-flash", apiKey: "", personaContextCount: 20, globalPaceSeconds: 15 });
+  const [aiConfig, setAiConfig] = useState({ provider: "gemini", model: "gemini-3.6-flash", apiKey: "", personaContextCount: 20, reactionLeadSeconds: 1.5, globalPaceSeconds: 15 });
   const [aiTesting, setAiTesting] = useState({ busy: false, result: null });
   const eventMeta = spec?.events?.find(e => e.id === draft?.trigger?.event);
   
@@ -1079,6 +1079,18 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
                   className={inputCls(theme)}
                 />
                 <span className={`text-[10px] mt-1 block ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>The amount of your recent outgoing messages from the triggered chat to inject into the AI prompt, allowing it to dynamically adapt to your persona for that specific person or group.</span>
+              </div>
+              <div>
+                <label className={`block font-semibold mb-1.5 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Reaction-to-message delay (seconds)</label>
+                <input
+                  type="number" min="1" max="10" step="0.5"
+                  value={aiConfig.reactionLeadSeconds ?? 1.5}
+                  onChange={e => setAiConfig(prev => ({ ...prev, reactionLeadSeconds: Math.max(1, Math.min(10, Number(e.target.value) || 1.5)) }))}
+                  className={inputCls(theme)}
+                />
+                <span className={`text-[10px] mt-1 block ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+                  When a reply contains both a reaction and a message, react first, wait this long, then start the normal typing delay. The separate AI reply pace is unchanged.
+                </span>
               </div>
               <div>
                 <label className={`block font-semibold mb-1.5 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>AI Reply Pace Interval (seconds)</label>

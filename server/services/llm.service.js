@@ -22,9 +22,10 @@ async function generateReply(config, systemPrompt, messagesContext) {
       }
     }
     
-    // Gemini strictly requires the history to end with a 'user' turn
-    if (contents.length > 0 && contents[contents.length - 1].role !== 'user') {
-       contents.push({ role: 'user', parts: [{ text: '(System: Please reply)' }] });
+    // The orchestrator supplies the real triggering message. Never append
+    // a fabricated user instruction to force generation.
+    if (!contents.length || contents[contents.length - 1].role !== 'user') {
+       throw new Error('AI Copilot: Gemini context must end with the triggering user message.');
     }
     
     try {

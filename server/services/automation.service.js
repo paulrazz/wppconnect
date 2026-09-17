@@ -4,30 +4,28 @@ const crypto = require('crypto');
 const eventStore = require('./event-store.service');
 const inboxStore = require('./inbox-store.service');
 const { generateReply } = require('./llm.service');
-const sharp = require('sharp');
+const { messageId, prepareChatContext, pendingIncomingCount, isLatestInboxMessage } = require('./ai-context.service');
+const { deliverAiReply } = require('./ai-response.service');
+const { renderSvgToDataUrl } = require('./ai-svg-render.service');
 
 // Per-account sequential queue so AI replies go out one-by-one like a human.
 
-async function renderSvgToDataUrl(svgString) {
-  try {
-    const buffer = await sharp(Buffer.from(svgString))
-      .png()
-      .toBuffer();
-    return `data:image/png;base64,${buffer.toString('base64')}`;
-  } catch(e) {
-    console.error('[SVG Render Error]', e);
-    return null;
-  }
-}
-
 const _aiQueues = new Map();
+const _latestAiMessages = new Map();
+const _answeredAiMessages = new Map();
+const _seenAiMessages = new Map();
+const LEGACY_INTELLIGENT_PROMPT = "You are me. Act as the human owner of this WhatsApp account. Before replying, silently analyze the user's emotional state, intent, and relationship to you based on the conversation history. Dynamically adapt your personality to fit the exact situation:\n- If they are a friend joking around, be casual and sarcastic.\n- If they are a customer with a problem, be empathetic and professional.\n- If they are asking a quick question, be brief and direct.\nAlways perfectly mirror their language, slang, and casing. Never reveal you are an AI.";
+const INTELLIGENT_PROMPT = "You are the WhatsApp account's automated reply assistant. Write one ready-to-send reply in the account owner's natural texting style, using genuine owner messages as style examples where available.\n\nPRIMARY RULE: Reply to the sender's latest unanswered messages as a batch. The newest message sets the immediate direction, but if the sender sent multiple messages since the account owner's last reply, acknowledge and answer every distinct unanswered question or request, normally in one natural reply and in the order that makes sense. Do not discard an earlier question just because a later one arrived. When a later message corrects an earlier one, follow the correction; do not answer the superseded request. Use older conversation only for context, not as new pending tasks. If the sender challenges a previous reply, address that directly and fix the mistake.\n\nBefore replying, silently determine what the latest message means and what a useful answer would contain. Answer directly. Match the situation and the owner's usual language, slang, casing, length and emoji use without exaggeration. Be casual with friends, calm about serious subjects and practical with customers. Prefer a short natural message, but include enough detail to fully answer. Do not pad with chatbot phrases such as 'Certainly', 'Great question', 'I'd be happy to help', summaries of the conversation, or unsolicited follow-up questions.\n\nIf something is unclear, use the chat history only when the meaning is genuinely supported. Otherwise answer the clear part and ask ONE brief, natural clarification. Never fabricate understanding. Don't invent prices, memories, personal experiences, promises, actions, checks, bookings or tool results. Don't pretend to have done something you haven't done. If directly asked whether you're a bot or AI, answer truthfully and briefly.\n\nSend only the message the recipient should see. No reasoning, commentary, headings or quotation marks around the reply. If several messages arrived, send one coherent response covering the outstanding points; do not ignore or duplicate them. Use quote or reaction tags only when appropriate; a single quote tag refers to the most recent message, so a combined reply is usually clearer for a multi-message batch. If no message needs a response, return an empty response only if the application supports it.";
 function runInQueue(apiKey, paceSeconds, taskFn) {
   if (!_aiQueues.has(apiKey)) _aiQueues.set(apiKey, Promise.resolve());
-  const next = _aiQueues.get(apiKey).then(async () => {
-    await taskFn();
-    if (paceSeconds > 0) await new Promise(r => setTimeout(r, paceSeconds * 1000));
-  }).catch(e => console.error('[AI Queue]', e.message));
-  _aiQueues.set(apiKey, next);
+  const previous = _aiQueues.get(apiKey).catch(() => {});
+  const next = previous.then(async () => {
+    const sent = await taskFn();
+    // Apply the configured pace only between actual replies. Superseded
+    // jobs never sent anything and must not delay the latest message.
+    if (sent && paceSeconds > 0) await new Promise(r => setTimeout(r, paceSeconds * 1000));
+  });
+  _aiQueues.set(apiKey, next.catch(e => console.error('[AI Queue]', e.message)));
   return next;
 }
 
@@ -844,6 +842,28 @@ class AutomationService {
     this.io = null;
   }
 
+  noteChatActivity(apiKey, chatId, value) {
+    if (!chatId || !value) return;
+    const key = `${apiKey}:${chatId}`;
+    const id = messageId(value);
+    if (!id) return;
+    const recent = _seenAiMessages.get(key) || new Set();
+    // A late duplicate event must never replace a newer incoming message.
+    if (recent.has(id)) return;
+    recent.add(id);
+    if (recent.size > 32) recent.delete(recent.values().next().value);
+    _seenAiMessages.delete(key);
+    _seenAiMessages.set(key, recent);
+    _latestAiMessages.delete(key);
+    _latestAiMessages.set(key, id);
+    if (_latestAiMessages.size > 5000) {
+      const oldest = _latestAiMessages.keys().next().value;
+      _latestAiMessages.delete(oldest);
+      _seenAiMessages.delete(oldest);
+      _answeredAiMessages.delete(oldest);
+    }
+  }
+
   setIo(io) {
     this.io = io;
   }
@@ -858,13 +878,21 @@ class AutomationService {
       const file = path.join(DATA_DIR, `${key}.json`);
       let rules = [];
       let aiConfig = {};
+      let needsPromptUpgrade = false;
       try {
         const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
         if (Array.isArray(raw.rules)) rules = raw.rules;
         if (raw.aiConfig) aiConfig = raw.aiConfig;
+        // Only migrate the untouched, exact legacy Intelligent Mode template.
+        // Never replace someone's edited or custom rule prompt.
+        needsPromptUpgrade = rules.some(rule => rule.action?.type === 'llm_reply' && rule.action.prompt === LEGACY_INTELLIGENT_PROMPT);
+        if (needsPromptUpgrade) rules = rules.map(rule => rule.action?.type === 'llm_reply' && rule.action.prompt === LEGACY_INTELLIGENT_PROMPT
+          ? { ...rule, action: { ...rule.action, prompt: INTELLIGENT_PROMPT } }
+          : rule);
       } catch (_) { /* First run for this tenant. */ }
       if (rules.length || Object.keys(aiConfig).length || fs.existsSync(file)) {
         this.stores.set(key, { file, rules, aiConfig });
+        if (needsPromptUpgrade) this._save(this.stores.get(key));
       } else if (!create) {
         return null;
       }
@@ -986,6 +1014,9 @@ class AutomationService {
     const session = whatsappService?.getSession?.(apiKey);
     const ctx = buildContext(event, data, { apiKey, whatsappService, selfId: session?.myJid || '' });
     if (!ctx) return;
+    if (event === 'message.received' && !ctx.fromMe && ctx.chatId && ctx.messageId && !_latestAiMessages.has(`${apiKey}:${ctx.chatId}`)) {
+      this.noteChatActivity(apiKey, ctx.chatId, ctx.messageId);
+    }
     let changed = false;
     for (const rule of store.rules) {
       if (!rule.enabled || rule.trigger.event !== event) continue;
@@ -1029,7 +1060,8 @@ class AutomationService {
 
     switch (action.type) {
       case 'send_text':
-        await whatsappService.sendMessage(apiKey, to, interpolate(action.text, ctx), quotedId ? { quotedMessageId: quotedId } : undefined);
+        const sent = await whatsappService.sendMessage(apiKey, to, interpolate(action.text, ctx), quotedId ? { quotedMessageId: quotedId } : undefined);
+        await inboxStore.markAutomatedMessage(apiKey, to, sent).catch(e => console.warn('[automation] Could not mark outgoing message:', e.message));
         break;
       case 'send_media': {
         const mediaSource = interpolate(action.media, ctx);
@@ -1052,7 +1084,8 @@ class AutomationService {
         if (!/^data:/.test(dataUrl)) {
           dataUrl = await resolveMediaSource(dataUrl);
         }
-        await whatsappService.sendFile(apiKey, to, dataUrl, filename, interpolate(action.caption || '', ctx) || undefined);
+        const sent = await whatsappService.sendFile(apiKey, to, dataUrl, filename, interpolate(action.caption || '', ctx) || undefined);
+        await inboxStore.markAutomatedMessage(apiKey, to, sent).catch(e => console.warn('[automation] Could not mark outgoing media:', e.message));
         break;
       }
       case 'send_reaction':
@@ -1106,62 +1139,62 @@ class AutomationService {
         if (!aiConfig || !aiConfig.apiKey) throw new Error('AI Copilot is not configured in settings.');
         
         const paceSeconds = aiConfig.globalPaceSeconds !== undefined ? Number(aiConfig.globalPaceSeconds) : 15;
-        
+        const triggerId = messageId(rawMessage?.id || ctx.messageId);
+        const latestKey = `${apiKey}:${ctx.chatId}`;
+        if (MESSAGE_EVENTS.has(event) && !triggerId) throw new Error('AI Copilot requires an incoming message ID.');
+        const tracked = MESSAGE_EVENTS.has(event) && Boolean(triggerId);
+        const sentByThisJob = new Set();
+        const isSuperseded = () => tracked && ![triggerId, ...sentByThisJob].includes(_latestAiMessages.get(latestKey));
+        const isAnswered = () => tracked && _answeredAiMessages.get(latestKey) === triggerId;
+        const canSend = async () => {
+          if (isSuperseded()) return false;
+          if (!tracked) return true;
+          const result = await inboxStore.getMessages(apiKey, ctx.chatId, { count: 1 });
+          const newest = Array.isArray(result) ? result.at(-1) : result?.messages?.at(-1);
+          if (isSuperseded() || isAnswered()) return false;
+          if (isLatestInboxMessage(newest, triggerId) || sentByThisJob.has(messageId(newest?.id))) return true;
+          // Bot replies can be persisted after a newer incoming message. They
+          // must not make that newer question appear to have been answered.
+          const outgoing = newest?.fromMe || newest?.isSentByMe || newest?.id?.fromMe;
+          return Boolean(outgoing && await inboxStore.isAutomatedMessage(apiKey, ctx.chatId, newest.id));
+        };
+
         await runInQueue(apiKey, paceSeconds, async () => {
+          if (isSuperseded() || isAnswered()) return;
           let retries = 0;
           const maxRetries = 2; // Try up to 3 times total
           
           while (retries <= maxRetries) {
+            if (isSuperseded() || isAnswered()) {
+              await whatsappService.stopTyping(apiKey, ctx.chatId).catch(() => {});
+              return;
+            }
             // 2. Fetch context (last N messages) - done inside queue to ensure it's completely fresh
             const limit = Number(action.contextLimit) || 10;
             const chatMsgsResult = await inboxStore.getMessages(apiKey, ctx.chatId, { count: limit });
             const chatMsgs = Array.isArray(chatMsgsResult) ? chatMsgsResult : (chatMsgsResult?.messages || []);
-            const contextMessages = [...chatMsgs].reverse().map(m => {
-               if (!m) return null;
-               const isMe = (m.fromMe || m.id?.fromMe || (m.author && m.author === myJid));
-               let text = m.body || m.caption || '';
-               if (m.hasMedia || ['image', 'video', 'document', 'audio', 'ptt', 'sticker'].includes(m.type)) {
-                   text += ` [Attached ${m.type || 'Media'}${m.filename ? ': ' + m.filename : ''}${m.mimetype ? ' (' + m.mimetype + ')' : ''}]`.trim();
-               }
-               if (m.hasQuotedMsg) {
-                   const quotedMsgBody = m.quotedMsgObj ? (m.quotedMsgObj.body || m.quotedMsgObj.caption || 'Media') : (m._data?.quotedMsg?.body || 'Media');
-                   text = `> ${quotedMsgBody}\n${text}`;
-               }
-               return {
-                 role: isMe ? 'assistant' : 'user',
-                 authorName: isMe ? 'Bot' : (m.sender?.pushname || m.sender?.name || m.sender?.formattedName || 'User'),
-                 text: text.trim()
-               };
-            }).filter(m => m && m.text);
-            
-            if (ctx.text && !contextMessages.find(m => m.text === ctx.text)) {
-               contextMessages.push({
-                 role: 'user',
-                 authorName: ctx.name || 'User',
-                 text: ctx.text
-               });
-            }
-            
-            // Gemini strictly requires the history to end with a user turn.
-            // If testing by messaging yourself, the last turn might be marked 'assistant'.
-            if (contextMessages.length > 0 && contextMessages[contextMessages.length - 1].role !== 'user') {
-               contextMessages.push({ role: 'user', authorName: 'System', text: 'Please reply.' });
-            }
-            
-            // Debug: Review Entire AI Prompt
-            console.log('\n\n=== [AI SYSTEM PROMPT BEGIN] ===\n' + prompt + '\n=== [AI SYSTEM PROMPT END] ===\n\n');
+            const triggerMessage = {
+              ...(rawMessage || {}),
+              id: triggerId || rawMessage?.id,
+              body: ctx.text || rawMessage?.body || rawMessage?.caption || '',
+              hasMedia: ctx.hasMedia || rawMessage?.hasMedia,
+              type: ctx.mediaType || rawMessage?.type,
+            };
+            const contextMessages = prepareChatContext(chatMsgs, triggerMessage, myJid, ctx.senderName);
+            const unansweredCount = pendingIncomingCount(contextMessages);
+            if (isSuperseded()) return;
 
             // 3. Read receipt / Start Typing
+            if (isSuperseded()) return;
             if (aiConfig.readReceipts) {
               await whatsappService.sendSeen(apiKey, ctx.chatId).catch(() => {});
             }
-            await whatsappService.startTyping(apiKey, ctx.chatId);
-            
+            // Generate before showing typing; a reaction can be sent immediately.
             try {
               // 4. Generate
               let prompt = interpolate(action.prompt || 'You are a helpful assistant.', ctx);
               
-              const capabilitiesStr = `\n\n[SYSTEM CAPABILITIES]\nYou can behave like a human with these optional tags in your response (use sparingly and naturally):\n- React to their message: <react>👍</react> (use emojis)\n- Quote their message: <quote>\n- Send an image: <svg>YOUR_SVG_CODE</svg> (will be converted to image)`;
+              const capabilitiesStr = `\n\n[SYSTEM CAPABILITIES]\nOptional actions, use only when appropriate: <react>😂</react> reacts to the latest incoming message; <quote> quotes that message in the text or image reply; <svg width="800" height="800" viewBox="0 0 800 800"><rect width='800' height='800' fill='lightblue'/></svg> creates a simple drawing, not a photograph. Output complete static SVG shapes, with no scripts or external assets. Use at most one reaction and one image. Reaction alone, message alone, and reaction plus message are all valid. Do not add action tags unnecessarily. A combined reaction and message is delivered in order: reaction first, then a short pause, then typing and the message.`;
               
               let personaStr = "";
               const personaCount = aiConfig.personaContextCount !== undefined ? Number(aiConfig.personaContextCount) : 20;
@@ -1185,49 +1218,39 @@ class AutomationService {
                  prompt += capabilitiesStr + personaStr;
               }
               
+              // Applies to every AI persona, not just Intelligent Mode.
+              // The newest job handles all consecutive unanswered messages.
+              if (unansweredCount > 1) {
+                prompt += `
+
+[UNANSWERED MESSAGE BATCH]
+The sender has sent ${unansweredCount} consecutive messages since the account owner's last reply. All are pending. Respond to every distinct unanswered question, request or concern in ONE coherent WhatsApp reply. Do not ignore the earlier message just because the latest arrived. If a later message corrects an earlier one, follow the correction rather than repeating an obsolete answer. Keep the latest message central. A <quote> tag can reference only the newest message, so prefer a combined reply when both need acknowledgement.`;
+              }
               const replyText = await generateReply(aiConfig, prompt, contextMessages);
-              
-              // 5. Dynamic human delay
-              const words = replyText.split(' ').length;
-              let delaySeconds = Math.max(10, Math.round(words / (60 / 60))); 
-              delaySeconds += Math.floor(Math.random() * 5); 
-              
-              await new Promise(r => setTimeout(r, delaySeconds * 1000));
-              
-              // 6. Stop Typing & Send
-              await whatsappService.stopTyping(apiKey, ctx.chatId);
-              
-              let svgMatch = replyText.match(/<svg>([\s\S]*?)<\/svg>/i);
-              let shouldQuote = false;
-              if (replyText.includes('<quote>')) {
-                  shouldQuote = true;
-                  replyText = replyText.replace(/<quote>/g, '').trim();
+              if (isSuperseded()) return false;
+              const delivered = await deliverAiReply({
+                output: replyText,
+                apiKey,
+                chatId: ctx.chatId,
+                triggerId,
+                whatsapp: whatsappService,
+                canSend,
+                renderSvg: renderSvgToDataUrl,
+                reactionLeadSeconds: aiConfig.reactionLeadSeconds,
+                markSent: sent => {
+                  if (sent?.id) sentByThisJob.add(messageId(sent.id));
+                  return inboxStore.markAutomatedMessage(apiKey, ctx.chatId, sent)
+                    .catch(error => console.warn('[AI Persona] Could not mark outgoing reply:', error.message));
+                },
+              });
+              if (delivered && tracked) {
+                _answeredAiMessages.delete(latestKey);
+                _answeredAiMessages.set(latestKey, triggerId);
+                if (_answeredAiMessages.size > 5000) _answeredAiMessages.delete(_answeredAiMessages.keys().next().value);
               }
-              let reactionMatch = replyText.match(/<react>(.*?)<\/react>/i);
-              if (reactionMatch) {
-                  const emoji = reactionMatch[1].trim();
-                  replyText = replyText.replace(reactionMatch[0], '').trim();
-                  await whatsappService.sendReaction(apiKey, rawId, emoji).catch(() => {});
-              }
-              
-              const sendOpts = shouldQuote ? { quotedMessageId: rawId } : undefined;
-              
-              if (svgMatch) {
-                  const svgCode = '<svg>' + svgMatch[1] + '</svg>';
-                  replyText = replyText.replace(svgMatch[0], '').trim();
-                  const dataUrl = await renderSvgToDataUrl(svgCode);
-                  if (dataUrl) {
-                      await whatsappService.sendFile(apiKey, ctx.chatId, dataUrl, 'generated.jpg', replyText, sendOpts);
-                  } else {
-                      await whatsappService.sendMessage(apiKey, ctx.chatId, replyText, sendOpts);
-                  }
-              } else if (replyText) {
-                  await whatsappService.sendMessage(apiKey, ctx.chatId, replyText, sendOpts);
-              }
-              
-              break; // Success! Exit retry loop.
+              return delivered;
             } catch (error) {
-              const isRateLimit = error.message && error.message.startsWith('RATE_LIMIT:');
+              const isRateLimit = !error.partialDelivery && error.message && error.message.startsWith('RATE_LIMIT:');
               if (!isRateLimit) {
                 await whatsappService.stopTyping(apiKey, ctx.chatId).catch(() => {});
               }

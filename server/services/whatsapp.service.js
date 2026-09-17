@@ -478,6 +478,13 @@ class WhatsAppService {
       // below (media cache, inbox store, socket stream, ledger, automation)
       // buckets and attributes the message identically.
       const message = normalizeViewOnce(normalizeChatIdentity(raw, session.apiKey));
+      // Claim the newest arrival synchronously: inbox persistence and AI
+      // generation can run concurrently, so a DB-only check has a send race.
+      if (!message.fromMe && !message.isSentByMe && !message.isStatus && !message.isStatusV3 && message.from !== 'status@broadcast') {
+        const activityChatId = message.chatId?._serialized || message.chatId ||
+          (message.fromMe || message.isSentByMe ? message.to : message.from);
+        if (activityChatId && message.id) automation.noteChatActivity(session.apiKey, activityChatId, message.id);
+      }
       // Preserve media while it is still downloadable. WhatsApp can remove
       // the live message immediately when the sender chooses Delete for all.
       if (['image', 'video', 'gif', 'audio', 'ptt', 'sticker', 'document'].includes(String(message.type || '').toLowerCase())) {
@@ -793,6 +800,8 @@ class WhatsAppService {
   async sendMessage(apiKey, to, text, options) {
     const session = this.getSession(apiKey);
     const client = this.requireClient(apiKey);
+    const { quotedMessageId, ...messageOptions } = options || {};
+    if (quotedMessageId) messageOptions.quotedMsg = quotedMessageId;
     if (String(to).endsWith('@lid')) {
       // A known LID chat can still lack the PN->LID cache entry used by the
       // normal sender. Target the existing in-page ChatModel/Wid directly.
@@ -802,7 +811,7 @@ class WhatsAppService {
         const sent = await globalThis.WPP.chat.sendTextMessage(chat.id, content, { ...sendOptions, markIsRead: false, waitForAck: true });
         const message = await globalThis.WAPI?.getMessageById?.(sent.id);
         return JSON.parse(JSON.stringify(message || sent));
-      }, { chatId: String(to), content: text, sendOptions: options || {} });
+      }, { chatId: String(to), content: text, sendOptions: messageOptions });
       eventStore.append('message.sent', result);
       session.chatPreviewCache.set(to, result);
       inboxStore.recordMessage(session.apiKey, String(to), result, this.resolveContactDisplayName(session, String(to)));
@@ -811,7 +820,7 @@ class WhatsAppService {
     const resolvedTo = await this.resolveDestination(apiKey, to);
     // WPPConnect defaults markIsRead to true when sending. Besides violating
     // passive mode, that read operation can fail for newer LID-only chats.
-    const result = await this.requireClient(apiKey).sendText(resolvedTo, text, { ...options, markIsRead: false });
+    const result = await this.requireClient(apiKey).sendText(resolvedTo, text, { ...messageOptions, markIsRead: false });
     eventStore.append('message.sent', result);
     session.chatPreviewCache.set(to, result);
     inboxStore.recordMessage(session.apiKey, String(resolvedTo), result, this.resolveContactDisplayName(session, String(resolvedTo)));
@@ -1300,10 +1309,14 @@ class WhatsAppService {
     }, { requestedId: chatId, loadEarlier });
   }
 
-  async sendFile(apiKey, to, dataUrl, filename, caption = '') {
+  async sendFile(apiKey, to, dataUrl, filename, caption = '', options) {
     const client = this.requireClient(apiKey);
     const resolvedTo = await this.resolveDestination(apiKey, to);
-    const result = await client.sendFileFromBase64(resolvedTo, dataUrl, filename, caption);
+    const { quotedMessageId, ...fileOptions } = options || {};
+    const result = await client.sendFile(resolvedTo, dataUrl, {
+      filename, caption, ...fileOptions, markIsRead: false,
+      ...(quotedMessageId ? { quotedMsg: quotedMessageId } : {}),
+    });
     this.cacheSentMedia(client, resolvedTo, dataUrl, filename);
     return result;
   }

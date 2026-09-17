@@ -158,6 +158,12 @@ class InboxStore {
         PRIMARY KEY (api_key, chat_id, msg_id)
       )`,
       `CREATE INDEX IF NOT EXISTS idx_inbox_msgs_key ON inbox_messages (api_key, chat_id, stored_at DESC)`,
+      `CREATE TABLE IF NOT EXISTS inbox_automated_messages (
+        api_key TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        msg_id TEXT NOT NULL,
+        PRIMARY KEY (api_key, chat_id, msg_id)
+      )`,
     ]) {
       await DB.run(statement);
     }
@@ -338,7 +344,7 @@ class InboxStore {
     try {
       const saved = this.saveMessage(apiKey, chatId, message);
       await DB.run(`INSERT INTO inbox_messages (api_key, chat_id, msg_id, stored_at, body_text, message_json) VALUES (?,?,?,?,?,?)
-        ON CONFLICT(api_key, chat_id, msg_id) DO UPDATE SET stored_at=excluded.stored_at, body_text=excluded.body_text, message_json=excluded.message_json`,
+        ON CONFLICT(api_key, chat_id, msg_id) DO UPDATE SET stored_at=inbox_messages.stored_at, body_text=excluded.body_text, message_json=excluded.message_json`,
         [apiKey, chatId, saved.id, saved.storedAt, saved.bodyText, saved.json]);
       // Server-side resolved nameHint takes priority: it carries the phone-book
       // saved name or formatted phone number, never the WA profile pushname.
@@ -471,7 +477,7 @@ class InboxStore {
     const limit = Math.min(Math.max(Number(count) || 50, 1), 200);
     const rows = before
       ? await DB.all('SELECT * FROM inbox_messages WHERE api_key=? AND chat_id=? AND stored_at<? ORDER BY stored_at DESC LIMIT ?', [apiKey, chatId, Number(before), limit + 1])
-      : await DB.all('SELECT * FROM inbox_messages WHERE api_key=? AND chat_id=? ORDER BY stored_at DESC LIMIT ?', [apiKey, chatId, limit + 1]);
+      : await DB.all('SELECT * FROM inbox_messages WHERE api_key=? AND chat_id=? ORDER BY stored_at DESC, rowid DESC LIMIT ?', [apiKey, chatId, limit + 1]);
     const hasMore = rows.length > limit;
     const page = rows.slice(0, limit).reverse();
     const messages = page.map(this.materialize);
@@ -491,14 +497,47 @@ class InboxStore {
     };
   }
 
+  async isAutomatedMessage(apiKey, chatId, messageIdValue) {
+    await this.readyPromise;
+    const id = canonical(messageIdValue);
+    if (!id) return false;
+    const row = await DB.get(
+      'SELECT 1 AS found FROM inbox_automated_messages WHERE api_key=? AND chat_id=? AND msg_id=?',
+      [apiKey, String(chatId), id]
+    );
+    return Boolean(row);
+  }
+
+  async markAutomatedMessage(apiKey, chatId, message) {
+    await this.readyPromise;
+    const id = canonical(message?.id);
+    if (!id) {
+      console.warn('[AI Persona] Sent message has no ID; cannot exclude it from future style examples.');
+      return;
+    }
+    await DB.run(
+      'INSERT OR IGNORE INTO inbox_automated_messages (api_key, chat_id, msg_id) VALUES (?,?,?)',
+      [apiKey, String(chatId), id]
+    );
+  }
+
   async getRecentFromMe(apiKey, chatId, limit = 20) {
     await this.readyPromise;
     if (!limit || limit <= 0 || !chatId) return [];
     const rows = await DB.all(
-      `SELECT message_json FROM inbox_messages
-       WHERE api_key=? AND chat_id=? AND json_extract(message_json, '$.id.fromMe') = 1
-       ORDER BY stored_at DESC LIMIT ?`,
-      [apiKey, chatId, limit * 3]
+      `SELECT m.message_json FROM inbox_messages AS m
+       WHERE m.api_key=? AND m.chat_id=?
+       AND (
+         json_extract(m.message_json, '$.fromMe') = 1 OR
+         json_extract(m.message_json, '$.isSentByMe') = 1 OR
+         json_extract(m.message_json, '$.id.fromMe') = 1
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM inbox_automated_messages AS automated
+         WHERE automated.api_key=m.api_key AND automated.chat_id=m.chat_id AND automated.msg_id=m.msg_id
+       )
+       ORDER BY m.stored_at DESC LIMIT ?`,
+      [apiKey, chatId, Math.max(1, Number(limit)) * 5]
     );
     const msgs = [];
     for (const r of rows) {
