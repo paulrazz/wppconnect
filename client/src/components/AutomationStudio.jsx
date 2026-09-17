@@ -10,7 +10,7 @@ import EmojiPicker from './EmojiPicker';
 import { MEDIA_LABELS } from '../messageText';
 import ContactPickerModal from './ContactPickerModal';
 
-const ROBUST_RULES = "
+const ROBUST_RULES = `
 
 PRIMARY RULE: Reply to the sender's latest unanswered messages as a batch. The newest message sets the immediate direction, but if the sender sent multiple messages since the account owner's last reply, acknowledge and answer every distinct unanswered question or request, normally in one natural reply and in the order that makes sense. Do not discard an earlier question just because a later one arrived. When a later message corrects an earlier one, follow the correction; do not answer the superseded request. Use older conversation only for context, not as new pending tasks. If the sender challenges a previous reply, address that directly and fix the mistake.
 
@@ -18,7 +18,7 @@ Before replying, silently determine what the latest message means and what a use
 
 If something is unclear, use the chat history only when the meaning is genuinely supported. Otherwise answer the clear part and ask ONE brief, natural clarification. Never fabricate understanding. Don't invent prices, memories, personal experiences, promises, actions, checks, bookings or tool results. Don't pretend to have done something you haven't done. If directly asked whether you're a bot or AI, answer truthfully and briefly.
 
-Send only the message the recipient should see. No reasoning, commentary, headings or quotation marks around the reply. If several messages arrived, send one coherent response covering the outstanding points; do not ignore or duplicate them. Use quote or reaction tags only when appropriate; a single quote tag refers to the most recent message, so a combined reply is usually clearer for a multi-message batch. If no message needs a response, return an empty response only if the application supports it.";
+Send only the message the recipient should see. No reasoning, commentary, headings or quotation marks around the reply. If several messages arrived, send one coherent response covering the outstanding points; do not ignore or duplicate them. Use quote or reaction tags only when appropriate; a single quote tag refers to the most recent message, so a combined reply is usually clearer for a multi-message batch. If no message needs a response, return an empty response only if the application supports it.`;
 
 const PROMPT_TEMPLATES = [
   { label: '-- Select a Persona Template --', value: '' },
@@ -490,6 +490,7 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
   const [aiConfigOpen, setAiConfigOpen] = useState(false);
   const [aiConfig, setAiConfig] = useState({ provider: "gemini", model: "gemini-3.6-flash", apiKey: "", personaContextCount: 20, reactionLeadSeconds: 1.5, globalPaceSeconds: 15 });
   const [aiTesting, setAiTesting] = useState({ busy: false, result: null });
+  const [showMasterPrompt, setShowMasterPrompt] = useState(false);
   const eventMeta = spec?.events?.find(e => e.id === draft?.trigger?.event);
   
   const isDM = lockedChatScope && !lockedChatScope.endsWith('@g.us') && lockedChatScope !== 'status@broadcast';
@@ -1070,13 +1071,23 @@ export default function AutomationStudio({ apiKey, theme, onDraftChange, initial
               </div>
               <div>
                 <label className={`block font-semibold mb-1.5 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>API Key</label>
-                <input 
+                                <input 
                   type="password"
                   value={aiConfig.apiKey} 
                   onChange={e => setAiConfig(prev => ({ ...prev, apiKey: e.target.value }))}
                   placeholder="Enter API Key..."
                   className={inputCls(theme)}
                 />
+                <div className="mt-3">
+                  <button 
+                    type="button"
+                    onClick={() => setShowMasterPrompt(true)} 
+                    className={`flex items-center text-xs font-medium px-3 py-1.5 rounded-lg border ${theme === 'dark' ? 'border-indigo-500/30 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20' : 'border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100'}`}
+                  >
+                    <Sparkles className="w-3.5 h-3.5 mr-2" />
+                    Edit Master AI Prompt
+                  </button>
+                </div>
               </div>
               <div>
                 <label className={`block font-semibold mb-1.5 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Chat Persona Context Limit</label>
