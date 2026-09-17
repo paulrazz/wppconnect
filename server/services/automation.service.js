@@ -4,24 +4,16 @@ const crypto = require('crypto');
 const eventStore = require('./event-store.service');
 const inboxStore = require('./inbox-store.service');
 const { generateReply } = require('./llm.service');
-const puppeteer = require('puppeteer');
+const sharp = require('sharp');
 
 // Per-account sequential queue so AI replies go out one-by-one like a human.
 
 async function renderSvgToDataUrl(svgString) {
   try {
-    const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox'] });
-    const page = await browser.newPage();
-    await page.setContent(svgString, { waitUntil: 'networkidle0' });
-    const element = await page.$('svg');
-    let base64;
-    if (element) {
-      base64 = await element.screenshot({ encoding: 'base64', type: 'jpeg' });
-    } else {
-      base64 = await page.screenshot({ encoding: 'base64', type: 'jpeg', fullPage: true });
-    }
-    await browser.close();
-    return `data:image/jpeg;base64,${base64}`;
+    const buffer = await sharp(Buffer.from(svgString))
+      .png()
+      .toBuffer();
+    return `data:image/png;base64,${buffer.toString('base64')}`;
   } catch(e) {
     console.error('[SVG Render Error]', e);
     return null;
