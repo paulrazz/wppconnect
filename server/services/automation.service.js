@@ -4,8 +4,30 @@ const crypto = require('crypto');
 const eventStore = require('./event-store.service');
 const inboxStore = require('./inbox-store.service');
 const { generateReply } = require('./llm.service');
+const puppeteer = require('puppeteer');
 
 // Per-account sequential queue so AI replies go out one-by-one like a human.
+
+async function renderSvgToDataUrl(svgString) {
+  try {
+    const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox'] });
+    const page = await browser.newPage();
+    await page.setContent(svgString, { waitUntil: 'networkidle0' });
+    const element = await page.$('svg');
+    let base64;
+    if (element) {
+      base64 = await element.screenshot({ encoding: 'base64', type: 'jpeg' });
+    } else {
+      base64 = await page.screenshot({ encoding: 'base64', type: 'jpeg', fullPage: true });
+    }
+    await browser.close();
+    return `data:image/jpeg;base64,${base64}`;
+  } catch(e) {
+    console.error('[SVG Render Error]', e);
+    return null;
+  }
+}
+
 const _aiQueues = new Map();
 function runInQueue(apiKey, paceSeconds, taskFn) {
   if (!_aiQueues.has(apiKey)) _aiQueues.set(apiKey, Promise.resolve());
@@ -1105,10 +1127,18 @@ class AutomationService {
             const contextMessages = [...chatMsgs].reverse().map(m => {
                if (!m) return null;
                const isMe = (m.fromMe || m.id?.fromMe || (m.author && m.author === myJid));
+               let text = m.body || m.caption || '';
+               if (m.hasMedia || ['image', 'video', 'document', 'audio', 'ptt', 'sticker'].includes(m.type)) {
+                   text += ` [Attached ${m.type || 'Media'}${m.filename ? ': ' + m.filename : ''}${m.mimetype ? ' (' + m.mimetype + ')' : ''}]`.trim();
+               }
+               if (m.hasQuotedMsg) {
+                   const quotedMsgBody = m.quotedMsgObj ? (m.quotedMsgObj.body || m.quotedMsgObj.caption || 'Media') : (m._data?.quotedMsg?.body || 'Media');
+                   text = `> ${quotedMsgBody}\n${text}`;
+               }
                return {
                  role: isMe ? 'assistant' : 'user',
                  authorName: isMe ? 'Bot' : (m.sender?.pushname || m.sender?.name || m.sender?.formattedName || 'User'),
-                 text: m.body || m.caption || ''
+                 text: text.trim()
                };
             }).filter(m => m && m.text);
             
@@ -1126,23 +1156,41 @@ class AutomationService {
                contextMessages.push({ role: 'user', authorName: 'System', text: 'Please reply.' });
             }
             
-            // 3. Start Typing
+            // Debug: Review Entire AI Prompt
+            console.log('\n\n=== [AI SYSTEM PROMPT BEGIN] ===\n' + prompt + '\n=== [AI SYSTEM PROMPT END] ===\n\n');
+
+            // 3. Read receipt / Start Typing
+            if (aiConfig.readReceipts) {
+              await whatsappService.sendSeen(apiKey, ctx.chatId).catch(() => {});
+            }
             await whatsappService.startTyping(apiKey, ctx.chatId);
             
             try {
               // 4. Generate
               let prompt = interpolate(action.prompt || 'You are a helpful assistant.', ctx);
               
+              const capabilitiesStr = `\n\n[SYSTEM CAPABILITIES]\nYou can behave like a human with these optional tags in your response (use sparingly and naturally):\n- React to their message: <react>👍</react> (use emojis)\n- Quote their message: <quote>\n- Send an image: <svg>YOUR_SVG_CODE</svg> (will be converted to image)`;
+              
+              let personaStr = "";
               const personaCount = aiConfig.personaContextCount !== undefined ? Number(aiConfig.personaContextCount) : 20;
               if (personaCount > 0) {
                 try {
                   const personaMsgs = await inboxStore.getRecentFromMe(apiKey, ctx.chatId, personaCount);
                   if (personaMsgs && personaMsgs.length > 0) {
-                    prompt += `\n\nTo help you perfectly mirror the human owner's tone and communication style, here are ${personaMsgs.length} of their most recent spontaneous messages sent specifically in this exact chat:\n` + personaMsgs.map(m => `"${m}"`).join('\n') + `\n\nAdopt this exact natural casing, slang, sentence length, and vocabulary.`;
+                    personaStr = `\n\n[PERSONA]\nTo help you perfectly mirror the human owner's tone and communication style, here are ${personaMsgs.length} of their most recent spontaneous messages sent specifically in this exact chat:\n` + personaMsgs.map(m => `"${m}"`).join('\n') + `\n\nAdopt this exact natural casing, slang, sentence length, and vocabulary.`;
                   }
                 } catch (e) {
                   console.error('[AI Persona] Failed to fetch persona context:', e);
                 }
+              }
+              
+              if (aiConfig.customSystemPromptTemplate) {
+                 prompt = aiConfig.customSystemPromptTemplate
+                   .replace('{{base_prompt}}', prompt)
+                   .replace('{{capabilities}}', capabilitiesStr)
+                   .replace('{{persona}}', personaStr);
+              } else {
+                 prompt += capabilitiesStr + personaStr;
               }
               
               const replyText = await generateReply(aiConfig, prompt, contextMessages);
@@ -1156,7 +1204,35 @@ class AutomationService {
               
               // 6. Stop Typing & Send
               await whatsappService.stopTyping(apiKey, ctx.chatId);
-              await whatsappService.sendMessage(apiKey, ctx.chatId, replyText, { quotedMessageId: rawId });
+              
+              let svgMatch = replyText.match(/<svg>([\s\S]*?)<\/svg>/i);
+              let shouldQuote = false;
+              if (replyText.includes('<quote>')) {
+                  shouldQuote = true;
+                  replyText = replyText.replace(/<quote>/g, '').trim();
+              }
+              let reactionMatch = replyText.match(/<react>(.*?)<\/react>/i);
+              if (reactionMatch) {
+                  const emoji = reactionMatch[1].trim();
+                  replyText = replyText.replace(reactionMatch[0], '').trim();
+                  await whatsappService.sendReaction(apiKey, rawId, emoji).catch(() => {});
+              }
+              
+              const sendOpts = shouldQuote ? { quotedMessageId: rawId } : undefined;
+              
+              if (svgMatch) {
+                  const svgCode = '<svg>' + svgMatch[1] + '</svg>';
+                  replyText = replyText.replace(svgMatch[0], '').trim();
+                  const dataUrl = await renderSvgToDataUrl(svgCode);
+                  if (dataUrl) {
+                      await whatsappService.sendFile(apiKey, ctx.chatId, dataUrl, 'generated.jpg', replyText, sendOpts);
+                  } else {
+                      await whatsappService.sendMessage(apiKey, ctx.chatId, replyText, sendOpts);
+                  }
+              } else if (replyText) {
+                  await whatsappService.sendMessage(apiKey, ctx.chatId, replyText, sendOpts);
+              }
+              
               break; // Success! Exit retry loop.
             } catch (error) {
               const isRateLimit = error.message && error.message.startsWith('RATE_LIMIT:');

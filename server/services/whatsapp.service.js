@@ -473,7 +473,7 @@ class WhatsAppService {
     // wppconnect `onMessage` listener filters out isSentByMe (listener.layer:
     // `if (msg.isSentByMe || msg.isStatusV3) return;`), which is exactly why
     // messages sent through the API used to never reach the live inbox.
-    client.onAnyMessage((raw) => {
+    client.onAnyMessage(async (raw) => {
       // Force a canonical chatId for group messages first, so every consumer
       // below (media cache, inbox store, socket stream, ledger, automation)
       // buckets and attributes the message identically.
@@ -514,7 +514,7 @@ class WhatsAppService {
       if (message.fromMe || message.isSentByMe) {
         const chatId = message.chatId?._serialized || message.chatId || message.to;
         if (chatId) this.cachePreview(session, chatId, message);
-        if (chatId) inboxStore.recordMessage(session.apiKey, chatId, message, this.resolveContactDisplayName(session, chatId));
+        if (chatId) await inboxStore.recordMessage(session.apiKey, chatId, message, this.resolveContactDisplayName(session, chatId));
         this.io?.to(`session_${session.apiKey}`).emit('new_message', message);
         // We must append it to eventStore! If it was sent via our API, eventStore 
         // will safely deduplicate it by ID. If it was sent physically from the phone, 
@@ -526,7 +526,7 @@ class WhatsAppService {
       eventStore.append('message.received', message);
       const chatId = message.chatId?._serialized || message.chatId || (message.fromMe ? message.to : message.from);
       if (chatId) this.cachePreview(session, chatId, message);
-      if (chatId) inboxStore.recordMessage(session.apiKey, chatId, message, this.resolveContactDisplayName(session, chatId));
+      if (chatId) await inboxStore.recordMessage(session.apiKey, chatId, message, this.resolveContactDisplayName(session, chatId));
       // Trigger automation rules (may send replies, templates, orders, etc.)
       void automation.handleIncomingMessage(message, session.apiKey, this);
       // A single incoming message can be a "mention" and/or a "quote" too.
@@ -1352,6 +1352,11 @@ class WhatsAppService {
   async sendList(apiKey, to, options) { return this.requireClient(apiKey).sendListMessage(await this.resolveDestination(apiKey, to), options); }
   async sendPoll(apiKey, to, name, choices, options) { return this.requireClient(apiKey).sendPollMessage(await this.resolveDestination(apiKey, to), name, choices, options); }
   sendReaction(apiKey, messageId, reaction) { return this.requireClient(apiKey).sendReactionToMessage(messageId, reaction); }
+  async sendSeen(apiKey, to) { 
+    const client = this.requireClient(apiKey);
+    const resolvedTo = await this.resolveDestination(apiKey, to);
+    return await client.sendSeen(resolvedTo); 
+  }
 
   async getEvents(query) { return await eventStore.list(query); }
   async getDeletedMessages(query) { 
