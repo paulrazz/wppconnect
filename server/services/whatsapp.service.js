@@ -802,6 +802,7 @@ class WhatsAppService {
     const client = this.requireClient(apiKey);
     const { quotedMessageId, ...messageOptions } = options || {};
     if (quotedMessageId) messageOptions.quotedMsg = quotedMessageId;
+    if (messageOptions.linkPreview === undefined) messageOptions.linkPreview = true;
     if (String(to).endsWith('@lid')) {
       // A known LID chat can still lack the PN->LID cache entry used by the
       // normal sender. Target the existing in-page ChatModel/Wid directly.
