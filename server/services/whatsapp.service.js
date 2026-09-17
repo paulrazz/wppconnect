@@ -521,7 +521,7 @@ class WhatsAppService {
       if (message.fromMe || message.isSentByMe) {
         const chatId = message.chatId?._serialized || message.chatId || message.to;
         if (chatId) this.cachePreview(session, chatId, message);
-        if (chatId) await inboxStore.recordMessage(session.apiKey, chatId, message, this.resolveContactDisplayName(session, chatId));
+        if (chatId) await inboxStore.recordMessage(session.apiKey, chatId, message, message.groupName || message.sender?.name || message.sender?.pushname || message.sender?.shortName || message.chat?.name || message.chat?.contact?.name || this.resolveContactDisplayName(session, chatId));
         this.io?.to(`session_${session.apiKey}`).emit('new_message', message);
         // We must append it to eventStore! If it was sent via our API, eventStore 
         // will safely deduplicate it by ID. If it was sent physically from the phone, 
@@ -533,7 +533,7 @@ class WhatsAppService {
       eventStore.append('message.received', message);
       const chatId = message.chatId?._serialized || message.chatId || (message.fromMe ? message.to : message.from);
       if (chatId) this.cachePreview(session, chatId, message);
-      if (chatId) await inboxStore.recordMessage(session.apiKey, chatId, message, this.resolveContactDisplayName(session, chatId));
+      if (chatId) await inboxStore.recordMessage(session.apiKey, chatId, message, message.groupName || message.sender?.name || message.sender?.pushname || message.sender?.shortName || message.chat?.name || message.chat?.contact?.name || this.resolveContactDisplayName(session, chatId));
       // Trigger automation rules (may send replies, templates, orders, etc.)
       void automation.handleIncomingMessage(message, session.apiKey, this);
       // A single incoming message can be a "mention" and/or a "quote" too.
